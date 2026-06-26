@@ -390,14 +390,6 @@ deferredMarkdownElements: ["image", "link"];
 
 ---
 
-## 관련 가이드
-
-- [폰트 커스텀 가이드](./guide_font.md)
-- [클라이언트 한글언어 강제 설정 가이드](./guide_language.md)
-- [채팅창 상단에 상품 배너 다는 가이드](./guide_product_banner.md)
-
----
-
 ## 참고 자료
 
 - [React CHANGELOG v1.31.0](https://github.com/sendbird/delight-ai-agent/blob/main/js/react/CHANGELOG.md)

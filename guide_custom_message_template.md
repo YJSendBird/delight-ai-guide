@@ -709,14 +709,6 @@ Glide.with(context)
 
 ---
 
-## 관련 가이드
-
-- [GA4 LiveMetric 통합 가이드](./guide_ga4_livemetric.md)
-- [채팅창 상단에 상품 배너 다는 가이드](./guide_product_banner.md)
-- [폰트 커스텀 가이드](./guide_font.md)
-
----
-
 ## 참고 자료
 
 - [React Custom Message Template 문서](https://github.com/sendbird/delight-ai-agent/blob/main/js/react/docs/features/messages.md#custom-message-template)

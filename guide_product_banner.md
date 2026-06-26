@@ -488,10 +488,3 @@ const ProductBannerWithLink = ({ productId }: { productId: string }) => {
 │ [입력창]                          │
 └─────────────────────────────────┘
 ```
-
----
-
-## 관련 가이드
-
-- [클라이언트 한글언어 강제 설정 가이드](./guide_language.md)
-- [커스텀 메시지 템플릿 사용 가이드](./guide_custom_message_template.md) (준비 중)

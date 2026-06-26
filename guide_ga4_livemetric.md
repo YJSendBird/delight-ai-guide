@@ -1061,13 +1061,6 @@ GA4 콘솔 → 보고서 → 실시간 → 이벤트 수 확인
 
 ---
 
-## 관련 가이드
-
-- [Custom Message Template 사용 가이드](./guide_custom_message_template.md)
-- [클라이언트 한글언어 강제 설정 가이드](./guide_language.md)
-
----
-
 ## 참고 자료
 
 - [JavaScript GA4 상세 가이드 (Logger 구현)](https://gist.github.com/bang9/40a93bd2b1cdbd84e4a7ac6d6e33f7cf#file-logging-md)
