@@ -160,6 +160,77 @@ final class ProductViewController: UIViewController {
 
 ---
 
+## 새 대화 버튼 처리 (iOS)
+
+제품별 대화 흐름에서는 사용자가 임의로 맥락 없는 새 대화를 만들지 않도록 새 대화 버튼을 제어해야 합니다.
+
+### 대화 목록의 "새 대화" 버튼 — 현재 제품으로 연결
+
+대화 목록 하단의 새 대화 버튼은 `SBAConversationListBottomView`를 서브클래싱해서 동작을 교체할 수 있습니다. 버튼(`button`)이 public으로 노출되고 `setupActions()`가 open이라, 기본 동작 대신 현재 제품의 대화 열기로 연결합니다.
+
+```swift
+import UIKit
+import SendbirdAIAgentMessenger
+
+// 현재 화면이 어떤 제품에 스코프되어 있는지 공급한다.
+// 대화 목록을 띄우는 화면에서 값을 설정한다.
+enum ProductConversationRouter {
+    static var currentProductId: String?
+    static var currentProductName: String?
+    static var open: ((_ productId: String, _ productName: String) -> Void)?
+}
+
+// 새 대화 버튼이 제품 스코프 대화를 열도록 교체한 커스텀 하단 뷰
+final class ProductScopedListBottomView: SBAConversationListBottomView {
+    override func setupActions() {
+        // SDK 기본 액션 대신 우리 동작으로 교체 (액션은 super 호출 없이 재정의)
+        button?.removeTarget(nil, action: nil, for: .touchUpInside)
+        button?.addTarget(self, action: #selector(didTapNewConversation), for: .touchUpInside)
+    }
+
+    @objc private func didTapNewConversation() {
+        guard let productId = ProductConversationRouter.currentProductId,
+              let productName = ProductConversationRouter.currentProductName else { return }
+        // openProductConversation(productId:productName:from:) 호출로 연결
+        ProductConversationRouter.open?(productId, productName)
+    }
+}
+
+// 대화 목록을 열기 전에 등록
+SBAConversationListModule.List.BottomView = ProductScopedListBottomView.self
+```
+
+사용 예시 — PDP에서 대화 목록을 열기 전에 라우터를 채워 둡니다.
+
+```swift
+ProductConversationRouter.currentProductId = "{PRODUCT_ID}"
+ProductConversationRouter.currentProductName = "{PRODUCT_NAME}"
+ProductConversationRouter.open = { [weak self] productId, productName in
+    guard let self else { return }
+    openProductConversation(productId: productId, productName: productName, from: self)
+}
+```
+
+### 대화 종료 후 "새 대화 시작" 버튼 — 숨김
+
+대화가 종료되면 대화 화면 하단에 "새 상담 시작" 뷰가 나타납니다. 이 뷰는 config로 끌 수 있습니다.
+
+```swift
+// 대화 종료 후 나타나는 새 대화 시작(talk to agent) 뷰 숨김
+AIAgentMessenger.config.conversation.isTalkToAgentViewEnabled = false
+```
+
+> 참고: 이전 이름인 `isConversationClosedViewEnabled`는 deprecated입니다. `isTalkToAgentViewEnabled`를 사용하세요.
+
+### 정리
+
+| 위치 | 요구 동작 | 방법 |
+| --- | --- | --- |
+| 대화 목록 하단 새 대화 버튼 | 현재 제품의 대화로 연결 | `SBAConversationListBottomView` 서브클래스 + `SBAConversationListModule.List.BottomView` 등록 |
+| 대화 종료 후 새 대화 시작 뷰 | 숨김 | `AIAgentMessenger.config.conversation.isTalkToAgentViewEnabled = false` |
+
+---
+
 ## 구현 포인트
 
 - `openProductConversation`은 화면에서 직접 길게 조립하지 않게 하려는 용도입니다.
