@@ -599,9 +599,128 @@ AIAgentAdapterProviders.conversation = { channel, uiParams, containerGenerator -
 
 ## iOS 구현
 
-iOS SDK의 경우, 아직 공식 custom message template 지원이 문서화되지 않았습니다.
+iOS SDK에서는 `SBACustomMessageTemplateView`를 서브클래싱해서 커스텀 템플릿 UI를 구현하고, `SBAModuleSet`에 등록합니다.
 
-향후 iOS 업데이트를 기다리거나, [iOS CHANGELOG](./ios/CHANGELOG.md)에서 최신 기능을 확인하세요.
+> **1.15.0 주의**: 커스텀 컴포넌트 서브클래스에 **stored property를 선언하면 대화 진입 시 크래시**합니다 (SDK 내부 의존성 주입이 프로퍼티를 순회하다 dynamic cast 오류 발생, 다음 릴리즈에서 수정 예정). 아래처럼 뷰는 `layoutBody()`에서 만들고, 참조가 필요하면 `tag` + computed property로 접근하세요.
+
+### 1단계: 커스텀 템플릿 뷰 생성
+
+```swift
+import UIKit
+import SendbirdAIAgentMessenger
+
+final class ProductOptionTemplateView: SBACustomMessageTemplateView {
+    private static let nameTag = 990_101
+    private static let priceTag = 990_102
+
+    // stored property 금지(1.15.0 크래시) — computed로 조회
+    private var nameLabel: UILabel? { viewWithTag(Self.nameTag) as? UILabel }
+    private var priceLabel: UILabel? { viewWithTag(Self.priceTag) as? UILabel }
+
+    override func layoutBody() -> UIView? {
+        let nameLabel = UILabel()
+        nameLabel.tag = Self.nameTag
+        nameLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        nameLabel.numberOfLines = 2
+
+        let priceLabel = UILabel()
+        priceLabel.tag = Self.priceTag
+        priceLabel.font = .systemFont(ofSize: 15, weight: .bold)
+
+        let addToCartButton = UIButton(type: .system)
+        addToCartButton.setTitle("장바구니 추가", for: .normal)
+        addToCartButton.addTarget(self, action: #selector(addToCartTapped), for: .touchUpInside)
+
+        return SBALinearLayout.vStack {
+            nameLabel
+            priceLabel
+            addToCartButton
+        }
+    }
+
+    // 서버가 내려준 custom_message_templates 데이터로 화면 구성
+    override func configure(with customMessageTemplates: [SBACustomMessageTemplateData]?) {
+        super.configure(with: customMessageTemplates)
+
+        guard let template = customMessageTemplates?.first(where: {
+            $0.templateId == "go-to-hanssem-mall-with-options"
+        }) else { return }
+
+        // 에러/상태 코드 처리
+        guard template.error == nil, template.response.status == 200,
+              let content = template.response.content,
+              let jsonData = content.data(using: .utf8),
+              let product = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
+        else {
+            nameLabel?.text = "상품 정보를 불러올 수 없습니다."
+            return
+        }
+
+        nameLabel?.text = product["productName"] as? String
+        if let price = product["price"] as? Int {
+            priceLabel?.text = "₩\(price)"
+        }
+    }
+
+    @objc private func addToCartTapped() {
+        // 선택 결과를 뷰 컨트롤러로 전달
+        sendEvent(name: "add_to_cart", data: ["templateId": "go-to-hanssem-mall-with-options"])
+    }
+}
+```
+
+### 2단계: 커스텀 뷰 등록
+
+```swift
+// 대화 화면을 열기 전에 등록
+SBAModuleSet.ConversationModule.List.Cell.CustomMessageTemplateView = ProductOptionTemplateView.self
+```
+
+### 3단계: 이벤트 처리
+
+커스텀 뷰에서 `sendEvent(name:data:)`로 보낸 이벤트는 `SBAConversationViewController`의 delegate 이벤트로 전달됩니다.
+
+```swift
+final class MyConversationViewController: SBAConversationViewController {
+    override func conversationModule(
+        _ listComponent: SBAConversationModule.List,
+        didReceiveEvent event: SBAConversationModule.List.DelegateEvent
+    ) {
+        switch event {
+        case .didReceiveCustomMessageTemplateAction(let name, let data, let message):
+            handleCustomTemplateAction(name: name, data: data, message: message)
+        default:
+            super.conversationModule(listComponent, didReceiveEvent: event)
+        }
+    }
+
+    private func handleCustomTemplateAction(name: String, data: Any?, message: BaseMessage) {
+        switch name {
+        case "add_to_cart":
+            // 한샘 몰 이동 등 후속 처리
+            break
+        default:
+            break
+        }
+    }
+}
+```
+
+### 데이터 구조 (iOS)
+
+```swift
+// SBACustomMessageTemplateData
+public struct SBACustomMessageTemplateData: Codable {
+    public let templateId: String        // JSON의 "id"
+    public let response: Response        // status + content(JSON 문자열)
+    public let error: String?
+
+    public struct Response: Codable {
+        public let status: Int
+        public let content: String?
+    }
+}
+```
 
 ---
 

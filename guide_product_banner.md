@@ -20,52 +20,128 @@
 ### 1단계: Context Object로 Product ID 전달
 
 ```swift
-AIAgentMessenger.attachLauncher(
+AIAgentMessenger.presentConversation(
     aiAgentId: "YOUR_AI_AGENT_ID"
 ) { params in
     // Context object를 통해 상품 ID 전달
     params.context = [
-        "productId": "PROD_12345",
-        "productName": "Sample Product"
+        "product_id": "{PRODUCT_ID}",
+        "product_name": "{PRODUCT_NAME}"
     ]
+    params.parent = self
+    params.presentationStyle = .fullScreen
 }
 ```
 
-### 2단계: 헤더 커스텀화를 통해 배너 표시
+### 2단계: 상품 배너 뷰 만들기
 
-iOS SDK에서는 모듈 커스텀화를 통해 헤더 영역을 추가할 수 있습니다.
+```swift
+import UIKit
+
+final class ProductBannerView: UIView {
+    private let imageView = UIImageView()
+    private let nameLabel = UILabel()
+    private let priceLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .secondarySystemBackground
+
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        imageView.layer.cornerRadius = 8
+
+        nameLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        nameLabel.numberOfLines = 2
+
+        priceLabel.font = .systemFont(ofSize: 14, weight: .bold)
+
+        let textStack = UIStackView(arrangedSubviews: [nameLabel, priceLabel])
+        textStack.axis = .vertical
+        textStack.spacing = 4
+
+        let stack = UIStackView(arrangedSubviews: [imageView, textStack])
+        stack.axis = .horizontal
+        stack.spacing = 12
+        stack.alignment = .center
+
+        addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            imageView.widthAnchor.constraint(equalToConstant: 48),
+            imageView.heightAnchor.constraint(equalToConstant: 48),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(name: String, price: String, image: UIImage?) {
+        nameLabel.text = name
+        priceLabel.text = price
+        imageView.image = image
+    }
+}
+```
+
+### 3단계: 헤더 커스텀으로 배너 붙이기
+
+`SBAConversationModule.Header`를 서브클래싱하고 모듈 셋에 등록하면 대화 화면 헤더를 확장할 수 있습니다.
+
+> **1.15.0 주의**: 커스텀 컴포넌트 서브클래스에 **stored property를 선언하면 대화 진입 시 크래시**합니다 (SDK 내부 의존성 주입이 프로퍼티를 순회하다 dynamic cast 오류 발생, 다음 릴리즈에서 수정 예정). 아래처럼 뷰는 `layoutBody()`에서 만들고, 참조가 필요하면 `tag` + computed property로 접근하세요. computed property와 static은 안전합니다.
 
 ```swift
 import SendbirdAIAgentMessenger
 import UIKit
 
-// AIAgentStarterKit에서 제공하는 커스텀화 빌더 활용
-AIAgentStarterKit.moduleSetCustomizationBuilder = {
-    // 헤더 상단에 상품 배너 추가
-    // 커스텀 컴포넌트를 통해 상품 정보 표시
-}
-```
+final class ProductBannerHeader: SBAConversationModule.Header {
+    private static let bannerTag = 990_001
 
-### 3단계: 상품 정보 조회 및 표시
+    // stored property 금지(1.15.0 크래시) — computed로 조회
+    private var bannerView: ProductBannerView? {
+        viewWithTag(Self.bannerTag) as? ProductBannerView
+    }
 
-```swift
-// 상품 정보를 API로부터 조회
-func fetchProductInfo(productId: String) {
-    let url = URL(string: "https://api.example.com/products/\(productId)")!
+    // 기본 헤더(layoutBody) 아래에 배너를 붙인다.
+    override func layoutBody() -> UIView {
+        let banner = ProductBannerView()
+        banner.tag = Self.bannerTag
+        banner.heightAnchor.constraint(equalToConstant: 64).isActive = true
 
-    URLSession.shared.dataTask(with: url) { data, response, error in
-        guard let data = data else { return }
+        loadProductInfo(into: banner)
 
-        if let productInfo = try? JSONDecoder().decode(Product.self, from: data) {
-            // 배너에 상품 정보 표시
+        return SBALinearLayout.vStack {
+            super.layoutBody()
+            banner
+        }
+    }
+
+    private func loadProductInfo(into banner: ProductBannerView) {
+        // 진입 시 전달한 product_id로 상품 정보를 조회해서 배너에 반영
+        fetchProductInfo(productId: "{PRODUCT_ID}") { product in
             DispatchQueue.main.async {
-                self.updateProductBanner(with: productInfo)
+                banner.configure(
+                    name: product.name,
+                    price: "₩\(product.price)",
+                    image: nil
+                )
             }
         }
-    }.resume()
+    }
 }
 
-// 상품 정보 모델
+// 대화 화면을 열기 전에 등록
+SBAModuleSet.ConversationModule.HeaderComponent = ProductBannerHeader.self
+```
+
+### 4단계: 상품 정보 조회
+
+```swift
 struct Product: Codable {
     let id: String
     let name: String
@@ -73,12 +149,22 @@ struct Product: Codable {
     let price: Double
     let description: String
 }
+
+func fetchProductInfo(productId: String, completion: @escaping (Product) -> Void) {
+    let url = URL(string: "https://api.example.com/products/\(productId)")!
+
+    URLSession.shared.dataTask(with: url) { data, _, _ in
+        guard let data = data,
+              let product = try? JSONDecoder().decode(Product.self, from: data) else { return }
+        completion(product)
+    }.resume()
+}
 ```
 
 ### 제약사항
 
-- **iOS**에서 헤더 커스텀화는 제한적입니다. 기본 헤더 구조를 크게 변경하기는 어렵습니다.
-- 따라서 상품 배너는 헤더 아래 메시지 영역 위에 별도 View로 추가하는 것을 권장합니다.
+- 헤더 높이를 키우는 대신, 배너를 헤더 아래 별도 뷰로 얹는 구성도 가능합니다.
+- 헤더의 기본 버튼(menu/close/handoff)은 `Header`의 `@LayoutSlot` 프로퍼티(`menuButton`, `closeButton`, `handoffButton`)로 노출되어 있어, `layoutLeftItems()` / `layoutRightItems()` 오버라이드로 배치를 조정할 수 있습니다.
 
 ---
 
