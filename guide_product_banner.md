@@ -161,6 +161,51 @@ func fetchProductInfo(productId: String, completion: @escaping (Product) -> Void
 }
 ```
 
+### 5단계: 다른 대화에서는 배너 숨김
+
+배너는 제품 페이지에서 연 대화에만 의미가 있습니다. 같은 대화 화면이라도 대화 목록에서 이전의 다른 대화로 진입하면, 그 대화는 처음 배너를 구성했을 때의 제품 정보와 무관하므로 배너를 숨겨야 합니다.
+
+판정 기준은 **channelURL 비교**입니다. 제품 대화를 열 때(`presentConversation` 호출 시점) 그 채널 URL을 기록해 두고, 헤더가 현재 표시 중인 채널과 비교해서 다르면 숨깁니다.
+
+```swift
+// 1) 제품 대화를 여는 시점에 채널 URL 기록
+enum ProductConversationRouter {
+    // 배너를 보여줄 대상 대화 — openProductConversation으로 연 채널 URL
+    static var activeChannelURL: String?
+}
+
+private func presentProductConversation(channelURL: String, context: [String: String], from parent: UIViewController) {
+    ProductConversationRouter.activeChannelURL = channelURL
+    // ... presentConversation 호출 (제품별 대화 연동 가이드 참고)
+}
+```
+
+```swift
+// 2) 헤더에서 현재 채널과 비교해 배너 노출 여부 갱신
+final class ProductBannerHeader: SBAConversationModule.Header {
+    // ... (3단계의 layoutBody 구성에 아래 로직 추가)
+
+    // 헤더의 dataSource로 현재 채널을 조회할 수 있다 (.channel 이벤트).
+    // 채널이 바뀌어 레이아웃이 갱신될 때마다 노출 여부를 다시 판정한다.
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateBannerVisibility()
+    }
+
+    private func updateBannerVisibility() {
+        guard let banner = bannerView else { return }
+        let channel: BaseChannel? = dataSource(with: .channel)
+        // 채널이 아직 로드되지 않은 진입 직후에는 진입 대상 대화로 간주하고 노출 유지
+        guard let currentURL = channel?.channelURL else { return }
+        banner.isHidden = (currentURL != ProductConversationRouter.activeChannelURL)
+    }
+}
+```
+
+- `dataSource(with: .channel)`은 헤더가 현재 표시 중인 `BaseChannel`을 돌려줍니다 (`BaseChannel`은 `SendbirdChatSDK` 타입이므로 `import SendbirdChatSDK` 필요).
+- 진입 직후 채널이 아직 로드되지 않은 시점(nil)에는 숨기지 않고 유지합니다 — 제품 대화 진입 자체가 배너 대상이기 때문입니다.
+- 대화 목록에서 다른 대화를 선택해 들어가면 `channelURL`이 기록해 둔 값과 달라지므로 배너가 숨겨집니다.
+
 ### 제약사항
 
 - 헤더 높이를 키우는 대신, 배너를 헤더 아래 별도 뷰로 얹는 구성도 가능합니다.
