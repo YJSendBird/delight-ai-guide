@@ -749,6 +749,8 @@ class ProductOptionTemplateHandler : CustomMessageTemplateViewHandler {
 
 ### 1단계: LiveMetric 핸들러 설정
 
+`AIAgentMessenger.onLiveMetricHandler`에 핸들러를 등록하면 SDK가 발생시키는 모든 LiveMetric을 받을 수 있습니다.
+
 ```swift
 import UIKit
 import SendbirdAIAgentMessenger
@@ -764,8 +766,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         FirebaseApp.configure()
 
         // AI Agent SDK 초기화 후 LiveMetric 핸들러 설정
-        AIAgentMessenger.onLiveMetricHandler = { metric in
-            self.handleLiveMetric(metric)
+        AIAgentMessenger.onLiveMetricHandler = { [weak self] metric in
+            self?.handleLiveMetric(metric)
         }
 
         return true
@@ -773,7 +775,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     // MARK: - LiveMetric 핸들러
 
-    private func handleLiveMetric(_ metric: LiveMetric) {
+    private func handleLiveMetric(_ metric: AIAgentMessenger.LiveMetric) {
         print("[LiveMetric] [\(metric.category.rawValue)] \(metric.metricKey) — \(metric.data)")
 
         // Firebase Analytics (GA4)로 전송
@@ -785,15 +787,41 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 ```
 
+### LiveMetric 데이터 구조 (iOS)
+
+```swift
+// AIAgentMessenger.LiveMetric
+public class LiveMetric {
+    public enum Category: String {
+        case handoff        // 핸드오프 시작/성공/실패
+        case conversation   // 대화 초기화/열림/닫힘
+        case message        // 메시지 송수신
+        case connection     // 연결 상태
+    }
+
+    public let category: Category         // 메트릭 카테고리
+    public let metricKey: String          // 예: "conversation_open"
+    open var data: [String: String] { }   // 카테고리별 payload
+}
+```
+
+주요 `metricKey` 값:
+
+| 카테고리 | metricKey |
+| --- | --- |
+| conversation | `conversation_initialized`, `conversation_open`, `conversation_closed` |
+| handoff | `handoff_started`, `handoff_succeeded`, `handoff_failed` |
+| message | `incoming_message_received`, `outgoing_message_<sendingStatus>` |
+| connection | `connection_connected` 등 |
+
 ### 2단계: Firebase Analytics (GA4) 전송 함수
 
 ```swift
 // MARK: - Firebase Analytics 전송
 
-private func sendToFirebaseAnalytics(_ metric: LiveMetric) {
+private func sendToFirebaseAnalytics(_ metric: AIAgentMessenger.LiveMetric) {
     // 이벤트명 생성 (category_metricKey 형식, 최대 40자)
-    let rawKey = metric.metricKey.replacingOccurrences(of: ":", with: "_")
-    let eventName = String("ai_agent_\(rawKey)".prefix(40))
+    let eventName = String("ai_agent_\(metric.metricKey)".prefix(40))
 
     // 파라미터 구성
     var params: [String: Any] = [
@@ -801,7 +829,7 @@ private func sendToFirebaseAnalytics(_ metric: LiveMetric) {
         "metric_key": metric.metricKey,
     ]
 
-    // 추가 데이터 병합
+    // 추가 데이터 병합 (data는 [String: String])
     for (key, value) in metric.data {
         params[key] = value
     }
@@ -815,130 +843,118 @@ private func sendToFirebaseAnalytics(_ metric: LiveMetric) {
 ```swift
 // MARK: - 메트릭별 커스텀 처리
 
-private func handleCustomMetrics(_ metric: LiveMetric) {
+private func handleCustomMetrics(_ metric: AIAgentMessenger.LiveMetric) {
     switch metric.metricKey {
-    case "conversation:conversation_open":
+    case "conversation_open":
         print("✅ 사용자가 대화를 시작했습니다")
         trackConversationStart(metric.data)
 
-    case "conversation:conversation_close":
+    case "conversation_closed":
         print("❌ 사용자가 대화를 종료했습니다")
         trackConversationEnd(metric.data)
 
-    case "message:message_received":
+    case "incoming_message_received":
         print("💬 AI Agent 메시지 수신")
         trackMessageReceived(metric.data)
 
-    case "template:rendered":
-        print("🎨 Custom Message Template 렌더링됨")
-        trackTemplateRendered(metric.data)
-
-    case "template_action:add_to_cart":
-        print("🛒 사용자가 장바구니 추가 클릭")
-        trackAddToCart(metric.data)
+    case "handoff_started":
+        print("🤝 상담원 핸드오프 시작")
+        trackHandoffStarted(metric.data)
 
     default:
         print("📝 기타 메트릭: \(metric.metricKey)")
     }
 }
 
-private func trackConversationStart(_ data: [String: Any]) {
+private func trackConversationStart(_ data: [String: String]) {
     print("대화 시작 데이터: \(data)")
 }
 
-private func trackConversationEnd(_ data: [String: Any]) {
+private func trackConversationEnd(_ data: [String: String]) {
     print("대화 종료 데이터: \(data)")
 }
 
-private func trackMessageReceived(_ data: [String: Any]) {
+private func trackMessageReceived(_ data: [String: String]) {
     print("메시지 수신 데이터: \(data)")
 }
 
-private func trackTemplateRendered(_ data: [String: Any]) {
-    print("Template 렌더링 데이터: \(data)")
-}
-
-private func trackAddToCart(_ data: [String: Any]) {
-    print("장바구니 추가 데이터: \(data)")
+private func trackHandoffStarted(_ data: [String: String]) {
+    print("핸드오프 시작 데이터: \(data)")
 }
 ```
 
 ### 4단계: Custom Message Template에서 액션 추적
 
+커스텀 템플릿 뷰의 버튼 액션에서 GA4 E-commerce 이벤트를 직접 전송합니다. (템플릿 뷰 구현은 [Custom Message Template 가이드](./guide_custom_message_template.md)의 iOS 섹션 참고)
+
+> **1.15.0 주의**: 커스텀 컴포넌트 서브클래스에 stored property를 선언하면 크래시합니다. 상품 정보는 static 저장소에 보관합니다 (static은 SDK의 프로퍼티 순회 대상이 아니라 안전).
+
 ```swift
 import UIKit
+import SendbirdAIAgentMessenger
 import FirebaseAnalytics
 
-class ProductOptionTemplateHandler: CustomMessageTemplateViewHandler {
-    func onCreateCustomMessageTemplateView(
-        context: CustomMessageTemplateContext,
-        message: BaseMessage,
-        data: [CustomMessageTemplateData],
-        callback: CustomMessageTemplateViewCallback
-    ) {
-        guard let template = data.first(where: { $0.id == "go-to-hanssem-mall-with-options" }),
+final class ProductOptionTemplateView: SBACustomMessageTemplateView {
+    // stored property 금지(1.15.0 크래시) — static 저장소 사용
+    private struct TrackedProduct {
+        var id = ""
+        var name = ""
+        var price = 0
+    }
+    private static var trackedProduct = TrackedProduct()
+
+    override func configure(with customMessageTemplates: [SBACustomMessageTemplateData]?) {
+        super.configure(with: customMessageTemplates)
+
+        guard let template = customMessageTemplates?.first(where: {
+            $0.templateId == "go-to-hanssem-mall-with-options"
+        }),
               let content = template.response.content,
               let jsonData = content.data(using: .utf8),
               let product = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
         else { return }
 
-        let view = createProductOptionView(product: product)
-        callback.onViewReady(view)
+        Self.trackedProduct = TrackedProduct(
+            id: product["productId"] as? String ?? "",
+            name: product["productName"] as? String ?? "",
+            price: product["price"] as? Int ?? 0
+        )
     }
 
-    private func createProductOptionView(product: [String: Any]) -> UIView {
-        let containerView = UIView()
+    @objc private func addToCartTapped() {
+        let product = Self.trackedProduct
 
-        let productId = product["productId"] as? String ?? ""
-        let productName = product["productName"] as? String ?? ""
-        let price = product["price"] as? Int ?? 0
+        // GA4 E-commerce 이벤트 (add_to_cart)
+        Analytics.logEvent(AnalyticsEventAddToCart, parameters: [
+            AnalyticsParameterCurrency: "KRW",
+            AnalyticsParameterItems: [[
+                AnalyticsParameterItemID: product.id,
+                AnalyticsParameterItemName: product.name,
+                AnalyticsParameterPrice: product.price,
+                AnalyticsParameterQuantity: 1,
+                AnalyticsParameterItemCategory: "furniture",
+            ]],
+        ])
 
-        // 장바구니 추가 버튼 액션
-        let addToCartAction = UIAction { _ in
-            // GA4 E-commerce 이벤트 (add_to_cart)
-            Analytics.logEvent(AnalyticsEventAddToCart, parameters: [
-                AnalyticsParameterCurrency: "KRW",
-                AnalyticsParameterItems: [[
-                    AnalyticsParameterItemID: productId,
-                    AnalyticsParameterItemName: productName,
-                    AnalyticsParameterPrice: price,
-                    AnalyticsParameterQuantity: 1,
-                    AnalyticsParameterItemCategory: "furniture",
-                ]],
-            ])
-        }
+        // 앱 후속 처리로 이벤트 전달
+        sendEvent(name: "add_to_cart", data: ["productId": product.id])
+    }
 
-        // 바로 구매 버튼 액션
-        let buyNowAction = UIAction { _ in
-            // GA4 E-commerce 이벤트 (begin_checkout)
-            Analytics.logEvent(AnalyticsEventBeginCheckout, parameters: [
-                AnalyticsParameterCurrency: "KRW",
-                AnalyticsParameterItems: [[
-                    AnalyticsParameterItemID: productId,
-                    AnalyticsParameterItemName: productName,
-                    AnalyticsParameterPrice: price,
-                    AnalyticsParameterQuantity: 1,
-                ]],
-            ])
-        }
+    @objc private func buyNowTapped() {
+        let product = Self.trackedProduct
 
-        let addToCartButton = UIButton(type: .system, primaryAction: addToCartAction)
-        addToCartButton.setTitle("장바구니 추가", for: .normal)
+        // GA4 E-commerce 이벤트 (begin_checkout)
+        Analytics.logEvent(AnalyticsEventBeginCheckout, parameters: [
+            AnalyticsParameterCurrency: "KRW",
+            AnalyticsParameterItems: [[
+                AnalyticsParameterItemID: product.id,
+                AnalyticsParameterItemName: product.name,
+                AnalyticsParameterPrice: product.price,
+                AnalyticsParameterQuantity: 1,
+            ]],
+        ])
 
-        let buyNowButton = UIButton(type: .system, primaryAction: buyNowAction)
-        buyNowButton.setTitle("바로 구매", for: .normal)
-
-        // 옵션 선택 변경 추적
-        func trackOptionChange(optionName: String, value: String) {
-            Analytics.logEvent("custom_template_option_change", parameters: [
-                "template_id": "go-to-hanssem-mall-with-options",
-                "product_id": productId,
-                "option_name": optionName,
-                "option_value": value,
-            ])
-        }
-
-        return containerView
+        sendEvent(name: "buy_now", data: ["productId": product.id])
     }
 }
 ```

@@ -7,33 +7,43 @@
 iOS SDK에서는 `SBAFontSet`을 통해 폰트를 커스텀할 수 있습니다.
 
 ```swift
-// 커스텀 폰트 패밀리 설정
-SBAFontSet.fontFamily = "YourCustomFont"
+// 커스텀 폰트 패밀리 설정 (전체 폰트에 일괄 적용)
+SBAFontSet.fontFamily = "{CUSTOM_FONT_FAMILY}"
 
-// 예시: 시스템 폰트 사용
-SBAFontSet.fontFamily = ".SFUI-Regular"
-
-// 예시: 커스텀 폰트 파일 사용 (앱에 포함된 경우)
-SBAFontSet.fontFamily = "NotoSansCJKkr-Regular"
+// nil 이면 시스템 폰트를 사용합니다 (기본값)
+SBAFontSet.fontFamily = nil
 ```
 
-### 폰트 커스텀 상태 확인
+### 스타일별 폰트 커스텀
 
-`SBAThemeFont` 인터페이스를 통해 폰트 커스텀 상태를 관리할 수 있습니다.
+폰트 패밀리 일괄 적용 대신, 스타일별로 개별 폰트를 지정할 수도 있습니다.
+
+```swift
+SBAFontSet.h1 = UIFont.systemFont(ofSize: 20, weight: .bold)
+SBAFontSet.h2 = UIFont.systemFont(ofSize: 18, weight: .semibold)
+SBAFontSet.body1 = UIFont.systemFont(ofSize: 16, weight: .regular)
+SBAFontSet.button1 = UIFont.systemFont(ofSize: 16, weight: .bold)
+SBAFontSet.caption1 = UIFont.systemFont(ofSize: 12, weight: .medium)
+```
+
+### 테마 폰트 커스텀 상태 확인
+
+테마의 개별 폰트는 `SBAThemeFont` 프로퍼티 래퍼로 관리됩니다. `$` 접두사로 접근해서 커스텀 여부 확인과 초기화를 할 수 있습니다.
 
 ```swift
 // 커스텀 폰트 적용 여부 확인
-if SBAFontSet.isCustomized {
+if SBATheme.conversation.header.title.$titleFont.isCustomized {
     // 커스텀 폰트가 적용됨
 }
 
 // 기본 폰트로 재설정
-SBAFontSet.resetToDefault()
+SBATheme.conversation.header.title.$titleFont.resetToDefault()
 ```
 
-### 언어별 최적화
+### 유의사항
 
-iOS SDK는 언어별로 자동으로 폰트와 레이아웃을 조정합니다. 다국어 지원 시 별도의 폰트 설정이 필요할 수 있습니다.
+- 앱 번들에 포함된 폰트만 사용할 수 있습니다 (Info.plist의 `UIAppFonts` 등록 필요).
+- `fontFamily`에 넣는 이름은 실제 폰트의 PostScript 이름과 일치해야 합니다.
 
 ---
 

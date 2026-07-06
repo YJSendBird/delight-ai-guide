@@ -247,11 +247,37 @@ export function App() {
 
 ## iOS
 
-**참고:** iOS SDK의 경우 아직 공식적인 `deferredMarkdownElements` 설정이 문서화되지 않았습니다.
+### 설정 방법
 
-iOS SDK 업그레이드나 새로운 기능 릴리스를 확인하려면 [iOS CHANGELOG](./ios/CHANGELOG.md)를 참고하세요.
+iOS SDK에서는 `AIAgentMessenger.config`의 `deferredMarkdownElements` 옵션으로 설정합니다. `SBADeferredMarkdownElement`는 OptionSet입니다.
 
-현재는 기본적인 마크다운 렌더링이 지원되며, 향후 업데이트에서 이 기능이 추가될 수 있습니다.
+```swift
+import SendbirdAIAgentMessenger
+
+// 이미지와 링크 모두 완성될 때까지 숨김
+AIAgentMessenger.config.conversation.list.deferredMarkdownElements = .all
+
+// 링크만 숨김
+AIAgentMessenger.config.conversation.list.deferredMarkdownElements = [.link]
+
+// 이미지만 숨김
+AIAgentMessenger.config.conversation.list.deferredMarkdownElements = [.image]
+
+// 기본 동작 (모든 요소 즉시 렌더링)
+AIAgentMessenger.config.conversation.list.deferredMarkdownElements = []
+```
+
+### 옵션
+
+```swift
+// SBADeferredMarkdownElement (OptionSet)
+public static let image: SBADeferredMarkdownElement  // 이미지 마크다운 숨김
+public static let link: SBADeferredMarkdownElement   // 링크 마크다운 숨김
+public static let all: SBADeferredMarkdownElement    // image + link
+```
+
+- 설정은 대화 화면을 열기 전에 해두면 됩니다.
+- 스트리밍 중 미완성 이미지/링크 토큰이 화면에 노출되지 않고, 완성된 뒤에 렌더링됩니다.
 
 ---
 
