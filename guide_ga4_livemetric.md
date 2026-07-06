@@ -528,222 +528,179 @@ const ProductOptionCard: React.FC<{ product: ProductWithOptions }> = ({
 
 ## Android 구현
 
-### 1단계: LiveMetric 리스너 설정
+### 개요
+
+**LiveMetric이란?**
+
+- SDK 내부에서 발생하는 **실시간 이벤트**(대화 시작/종료, 메시지 송수신, 상담원 연결, 커넥션 상태 등)
+- `AIAgentMessenger.addLiveMetricHandler()`로 등록한 핸들러에 이벤트 객체가 전달됨
+- 이를 Firebase Analytics(GA4) 이벤트로 변환해 사용자 행동 분석에 활용
+
+---
+
+### LiveMetric 이벤트 종류
+
+모든 이벤트는 `LiveMetric`을 상속하며, `category`(`MetricCategory`)와 `metricKey`(String)를 갖습니다.
+
+| 클래스                                | metricKey                        | 주요 데이터                                        |
+| ------------------------------------- | -------------------------------- | -------------------------------------------------- |
+| `ConversationMetric.Initialized`      | `conversation_initialized`       | `channelUrl`                                       |
+| `ConversationMetric.Open`             | `conversation_open`              | `channelUrl`                                       |
+| `ConversationMetric.Closed`           | `conversation_closed`            | `channelUrl`                                       |
+| `MessageMetric.Incoming`              | `incoming_message_received`      | `channelUrl`, `messageId`, `senderType`, `createdAt`, `conversationId` |
+| `MessageMetric.Outgoing`              | `outgoing_message_pending` / `outgoing_message_succeeded` / `outgoing_message_failed` | `channelUrl`, `requestId`, `messageId`, `target`, `sendingStatus`, `createdAt`, `conversationId` |
+| `HandoffMetric.Started`               | `handoff_started`                | `channelUrl`                                       |
+| `HandoffMetric.Succeeded`             | `handoff_succeeded`              | `channelUrl`                                       |
+| `HandoffMetric.Failed`                | `handoff_failed`                 | `channelUrl`                                       |
+| `ConnectionMetric.Connected`          | `connection_connected`           | `userId`                                           |
+| `ConnectionMetric.ReconnectStarted`   | `connection_reconnect_started`   | `userId`                                           |
+| `ConnectionMetric.ReconnectSucceeded` | `connection_reconnect_succeeded` | `userId`                                           |
+| `ConnectionMetric.ReconnectFailed`    | `connection_reconnect_failed`    | `userId`                                           |
+| `ConnectionMetric.Disconnected`       | `connection_disconnected`        | `userId`                                           |
+
+`category`는 `conversation` / `message` / `handoff` / `connection` 네 가지입니다.
+
+---
+
+### 1단계: LiveMetric 핸들러 등록
+
+앱 초기화 시 1회 등록합니다. `identifier`는 핸들러 제거 시 사용하는 고유 키입니다.
 
 ```kotlin
 import com.sendbird.sdk.aiagent.messenger.AIAgentMessenger
-import com.sendbird.sdk.aiagent.messenger.model.LiveMetric
+import com.sendbird.sdk.aiagent.messenger.model.metrics.ConnectionMetric
+import com.sendbird.sdk.aiagent.messenger.model.metrics.ConversationMetric
+import com.sendbird.sdk.aiagent.messenger.model.metrics.HandoffMetric
+import com.sendbird.sdk.aiagent.messenger.model.metrics.LiveMetric
+import com.sendbird.sdk.aiagent.messenger.model.metrics.MessageMetric
+
+AIAgentMessenger.addLiveMetricHandler("ga4-metric-handler") { metric ->
+    sendToFirebaseAnalytics(metric)
+}
+
+// 필요 시 제거
+// AIAgentMessenger.removeLiveMetricHandler("ga4-metric-handler")
+// AIAgentMessenger.removeLiveMetricHandlers()  // 전체 제거
+```
+
+> 핸들러는 SDK 이벤트 스레드에서 자주 호출될 수 있으므로 **가볍고 논블로킹**하게 유지하세요.
+
+---
+
+### 2단계: Firebase Analytics(GA4)로 전송
+
+```kotlin
+import android.os.Bundle
 import com.google.firebase.analytics.FirebaseAnalytics
+import com.google.firebase.analytics.ktx.analytics
+import com.google.firebase.ktx.Firebase
 
-class MainActivity : AppCompatActivity() {
-    private lateinit var firebaseAnalytics: FirebaseAnalytics
+private fun sendToFirebaseAnalytics(metric: LiveMetric) {
+    val params = Bundle().apply {
+        putString("category", metric.category.value)
+        putString("metric_key", metric.metricKey)
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+        when (metric) {
+            is ConversationMetric.Initialized -> putString("channel_url", metric.channelUrl)
+            is ConversationMetric.Open -> putString("channel_url", metric.channelUrl)
+            is ConversationMetric.Closed -> putString("channel_url", metric.channelUrl)
 
-        // Firebase Analytics 초기화
-        firebaseAnalytics = FirebaseAnalytics.getInstance(this)
+            is MessageMetric.Incoming -> {
+                putString("channel_url", metric.channelUrl)
+                putLong("message_id", metric.messageId)
+                putString("sender_type", metric.senderType.value)
+            }
+            is MessageMetric.Outgoing -> {
+                putString("channel_url", metric.channelUrl)
+                putString("request_id", metric.requestId)
+                metric.messageId?.let { putLong("message_id", it) }
+            }
 
-        // LiveMetric 리스너 설정
-        AIAgentMessenger.setLiveMetricListener { metric ->
-            handleLiveMetric(metric)
+            is HandoffMetric.Started -> putString("channel_url", metric.channelUrl)
+            is HandoffMetric.Succeeded -> putString("channel_url", metric.channelUrl)
+            is HandoffMetric.Failed -> putString("channel_url", metric.channelUrl)
+
+            is ConnectionMetric -> { /* userId는 PII 가능성이 있어 전송 생략 권장 */ }
         }
     }
 
-    /**
-     * LiveMetric 핸들러
-     */
-    private fun handleLiveMetric(metric: LiveMetric) {
-        Log.d("LiveMetric", "수신: ${metric.category} / ${metric.metricKey}")
-        Log.d("LiveMetric", "데이터: ${metric.data}")
-
-        // GA4 (Firebase Analytics)로 전송
-        sendToFirebaseAnalytics(metric)
-
-        // 커스텀 처리
-        handleCustomMetrics(metric)
-    }
-
-    /**
-     * Firebase Analytics (GA4)로 전송
-     */
-    private fun sendToFirebaseAnalytics(metric: LiveMetric) {
-        val bundle = Bundle().apply {
-            putString("category", metric.category)
-            putString("metric_key", metric.metricKey)
-
-            // 추가 데이터 전송
-            metric.data.forEach { (key, value) ->
-                when (value) {
-                    is String -> putString(key, value)
-                    is Int -> putInt(key, value)
-                    is Long -> putLong(key, value)
-                    is Double -> putDouble(key, value)
-                    else -> putString(key, value.toString())
-                }
-            }
-        }
-
-        val eventName = "ai_agent_${metric.metricKey.replace(":", "_")}"
-        firebaseAnalytics.logEvent(eventName, bundle)
-    }
-
-    /**
-     * 메트릭별 커스텀 처리
-     */
-    private fun handleCustomMetrics(metric: LiveMetric) {
-        when (metric.metricKey) {
-            "conversation:conversation_open" -> {
-                Log.d("Conversation", "대화 시작됨")
-                trackConversationStart(metric.data)
-            }
-
-            "conversation:conversation_close" -> {
-                Log.d("Conversation", "대화 종료됨")
-                trackConversationEnd(metric.data)
-            }
-
-            "template:rendered" -> {
-                Log.d("Template", "Custom Message Template 렌더링됨")
-                trackTemplateRendered(metric.data)
-            }
-
-            "template_action:add_to_cart" -> {
-                Log.d("Template", "장바구니 추가 클릭")
-                trackAddToCart(metric.data)
-            }
-        }
-    }
-
-    private fun trackConversationStart(data: Map<String, Any>) {
-        Log.d("Analytics", "대화 시작: $data")
-    }
-
-    private fun trackConversationEnd(data: Map<String, Any>) {
-        Log.d("Analytics", "대화 종료: $data")
-    }
-
-    private fun trackTemplateRendered(data: Map<String, Any>) {
-        Log.d("Analytics", "Template 렌더링: $data")
-    }
-
-    private fun trackAddToCart(data: Map<String, Any>) {
-        Log.d("Analytics", "장바구니 추가: $data")
-    }
+    // GA4 이벤트명 규칙: snake_case, 최대 40자
+    Firebase.analytics.logEvent("ai_agent_${metric.metricKey}", params)
 }
 ```
 
-### 2단계: Custom Message Template에서 액션 추적
+---
+
+### 3단계: 이벤트별 커스텀 처리 (선택)
+
+퍼널 분석 등 특정 이벤트에만 반응하고 싶다면 타입으로 분기합니다.
 
 ```kotlin
-import com.google.firebase.analytics.FirebaseAnalytics
-import org.json.JSONObject
-
-class ProductOptionTemplateHandler : CustomMessageTemplateViewHandler {
-    override fun onCreateCustomMessageTemplateView(
-        context: Context,
-        message: BaseMessage,
-        data: List<CustomMessageTemplateData>,
-        callback: CustomMessageTemplateViewCallback
-    ) {
-        val template = data.firstOrNull { it.id == "go-to-hanssem-mall-with-options" }
-            ?: return
-
-        try {
-            val content = template.response.content ?: return
-            val product = JSONObject(content)
-            val firebaseAnalytics = FirebaseAnalytics.getInstance(context)
-
-            val view = createProductOptionView(context, product, firebaseAnalytics)
-            callback.onViewReady(view)
-        } catch (e: Exception) {
-            Log.e("ProductOption", "Error: ${e.message}")
+AIAgentMessenger.addLiveMetricHandler("funnel-handler") { metric ->
+    when (metric) {
+        is ConversationMetric.Open -> {
+            // 대화 시작 — 상담 퍼널 진입
         }
-    }
-
-    private fun createProductOptionView(
-        context: Context,
-        product: JSONObject,
-        firebaseAnalytics: FirebaseAnalytics
-    ): View {
-        val view = LayoutInflater.from(context).inflate(R.layout.custom_product_option_template, null)
-
-        // 상품 정보 설정
-        val productId = product.optString("productId")
-        val productName = product.optString("productName", "상품명 없음")
-        val price = product.optLong("price", 0)
-
-        // 옵션 Spinner 설정
-        val optionsContainer = view.findViewById<android.widget.LinearLayout>(R.id.optionsContainer)
-        val options = product.optJSONObject("options") ?: JSONObject()
-        val selectedOptions = mutableMapOf<String, String>()
-
-        options.keys().forEach { optionName ->
-            val optionValues = options.getJSONArray(optionName)
-            val valuesList = mutableListOf<String>()
-            valuesList.add("-- 선택해주세요 --")
-
-            for (i in 0 until optionValues.length()) {
-                valuesList.add(optionValues.getString(i))
-            }
-
-            val spinner = Spinner(context).apply {
-                adapter = android.widget.ArrayAdapter(
-                    context,
-                    android.R.layout.simple_spinner_item,
-                    valuesList
-                )
-                setOnItemSelectedListener(object : android.widget.AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(parent: android.widget.AdapterView<*>?, v: View?, position: Int, id: Long) {
-                        val value = if (position > 0) valuesList[position] else ""
-                        selectedOptions[optionName] = value
-
-                        // GA4 추적
-                        val bundle = Bundle().apply {
-                            putString("product_id", productId)
-                            putString("option_name", optionName)
-                            putString("option_value", value)
-                        }
-                        firebaseAnalytics.logEvent("custom_template_option_change", bundle)
-                    }
-
-                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-                })
-            }
-
-            optionsContainer.addView(spinner)
+        is ConversationMetric.Closed -> {
+            // 대화 종료 — 상담 퍼널 종료
         }
-
-        // 수량 입력
-        val quantityInput = view.findViewById<EditText>(R.id.quantityInput).apply {
-            setText("1")
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        is HandoffMetric.Succeeded -> {
+            // 상담원 연결 성공
         }
-
-        // 장바구니 추가 버튼
-        view.findViewById<Button>(R.id.addToCartButton).setOnClickListener {
-            val quantity = quantityInput.text.toString().toIntOrNull() ?: 1
-
-            // GA4 추적 (E-commerce)
-            val bundle = Bundle().apply {
-                putString("currency", "KRW")
-                putString("item_id", productId)
-                putString("item_name", productName)
-                putLong("price", price)
-                putInt("quantity", quantity)
-                putString("item_variant", selectedOptions.toString())
-            }
-            firebaseAnalytics.logEvent("add_to_cart", bundle)
-
-            android.widget.Toast.makeText(context, "장바구니에 추가되었습니다!", android.widget.Toast.LENGTH_SHORT).show()
-        }
-
-        return view
+        else -> Unit
     }
 }
 ```
 
 ---
+
+### 커스텀 템플릿 액션 추적 (장바구니 추가 등)
+
+상품 옵션 선택, 장바구니 추가 같은 **커스텀 템플릿 내 사용자 액션**은 SDK가 LiveMetric으로 발행하지 않습니다. [Custom Message Template 가이드](./guide_custom_message_template.md)에서 만든 버튼 클릭 리스너에서 GA4 E-commerce 이벤트를 직접 전송하세요.
+
+```kotlin
+// ProductOptionTemplateHandler의 장바구니 버튼 클릭 시
+private fun onAddToCart(productId: String, productName: String, price: Long, quantity: Int, options: Map<String, String>) {
+    Firebase.analytics.logEvent(FirebaseAnalytics.Event.ADD_TO_CART) {
+        param(FirebaseAnalytics.Param.CURRENCY, "KRW")
+        param(FirebaseAnalytics.Param.VALUE, price.toDouble() * quantity)
+        param(FirebaseAnalytics.Param.ITEMS, arrayOf(Bundle().apply {
+            putString(FirebaseAnalytics.Param.ITEM_ID, productId)
+            putString(FirebaseAnalytics.Param.ITEM_NAME, productName)
+            putDouble(FirebaseAnalytics.Param.PRICE, price.toDouble())
+            putLong(FirebaseAnalytics.Param.QUANTITY, quantity.toLong())
+            putString(FirebaseAnalytics.Param.ITEM_VARIANT, options.toString())
+        }))
+    }
+}
+```
+
+---
+
+### Firebase 설정
+
+1. Firebase 프로젝트에 앱 등록 후 `google-services.json`을 앱 모듈에 추가
+2. Gradle 의존성 추가
+
+```kotlin
+// app/build.gradle.kts
+dependencies {
+    implementation(platform("com.google.firebase:firebase-bom:33.1.0"))
+    implementation("com.google.firebase:firebase-analytics-ktx")
+}
+```
+
+3. GA4 실시간 보고서(GA4 콘솔 → 보고서 → 실시간)에서 이벤트 수집 확인
+
+---
+
+### 주의사항
+
+- **개인정보(PII) 전송 금지**: `userId` 등 식별 정보는 GA4 이용약관에 맞게 처리하세요.
+- **이벤트 네이밍**: snake_case, 최대 40자. `ai_agent_` 접두어 + `metricKey` 조합은 모두 40자 이내입니다.
+- **등록 시점**: 핸들러는 init 직후 등록해야 초기 커넥션/대화 이벤트를 놓치지 않습니다.
+- **재초기화 시 핸들러 소멸**: `AIAgentMessenger.initialize()`가 다른 파라미터(appId/apiHost 등)로 **다시 호출되면 등록된 LiveMetric 핸들러가 모두 제거**됩니다. 앱이 초기화를 다시 수행하는 흐름(예: 환경/앱 전환)이 있다면 초기화 이후 핸들러를 재등록하세요.
+- **`conversation_open`의 의미**: 대화 화면 진입이 아니라 **대화 상태가 `open`으로 바뀔 때** 발생합니다 (예: 첫 메시지 전송 시). 화면 진입 추적이 필요하면 앱 쪽 화면 이벤트를 함께 사용하세요.
 
 ## iOS 구현
 

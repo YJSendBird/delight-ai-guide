@@ -170,88 +170,203 @@ func fetchProductInfo(productId: String, completion: @escaping (Product) -> Void
 
 ## Android
 
-### 1단계: Context Object로 Product ID 전달
+### 개요
 
-```kotlin
-MessengerLauncher(this, "YOUR_AI_AGENT_ID", LauncherSettingsParams(
-    context = mapOf(
-        "productId" to "PROD_12345",
-        "productName" to "Sample Product"
-    )
-)).attach()
+**Flow:**
+
+1. 앱에서 사용자가 보고 있는 상품의 ID를 파악
+2. Context Object(`context` 맵)를 통해 AI Agent SDK에 상품 ID 전달
+3. `ConversationModule`을 확장해 헤더 아래에 배너 View 추가
+4. 상품 정보를 API로 조회해 배너에 표시
+
 ```
-
-또는 전체 화면 모드:
-
-```kotlin
-startActivity(
-    MessengerActivity.newIntentForConversation(
-        context = this,
-        aiAgentId = "YOUR_AI_AGENT_ID",
-        conversationSettingsParams = ConversationSettingsParams(
-            context = mapOf(
-                "productId" to "PROD_12345",
-                "productName" to "Sample Product"
-            )
-        )
-    )
-)
+┌─────────────────────────────────┐
+│ Conversation Header             │
+├─────────────────────────────────┤
+│ [Product Image] Product Name    │  <- 상품 배너 (커스텀 View)
+│                    ₩599,000     │
+├─────────────────────────────────┤
+│ AI Agent: 안녕하세요! ...        │
+│ User: 이 상품의 크기가 ...       │
+│                                 │
+│ [입력창]                         │
+└─────────────────────────────────┘
 ```
-
-### 2단계: 상품 정보 조회
-
-```kotlin
-class ProductBannerManager {
-    fun fetchProductInfo(productId: String, callback: (Product) -> Unit) {
-        // Retrofit 또는 다른 HTTP 클라이언트로 API 호출
-        val apiService = RetrofitClient.create(ProductApiService::class.java)
-
-        apiService.getProduct(productId).enqueue(object : Callback<Product> {
-            override fun onResponse(call: Call<Product>, response: Response<Product>) {
-                response.body()?.let { callback(it) }
-            }
-
-            override fun onFailure(call: Call<Product>, t: Throwable) {
-                // 에러 처리
-            }
-        })
-    }
-}
-
-data class Product(
-    val id: String,
-    val name: String,
-    val imageUrl: String,
-    val price: Double,
-    val description: String
-)
-```
-
-### 3단계: 헤더 테마 커스텀화
-
-Android에서는 `ConversationHeaderTheme`을 통해 헤더를 커스텀할 수 있습니다.
-
-```kotlin
-// MessengerTheme 커스텀화
-val customTheme = object : MessengerTheme {
-    override val conversation: ConversationTheme
-        get() = object : ConversationTheme {
-            override val header: ConversationHeaderTheme
-                get() = object : ConversationHeaderTheme {
-                    // 헤더 배경색, 높이 등 커스텀화
-                }
-        }
-}
-
-AIAgentMessenger.setTheme(customTheme)
-```
-
-### 제약사항
-
-- Android 커스텀화는 색상, 배경 등 제한적입니다.
-- 상품 배너를 위한 완전히 새로운 View를 추가하려면, Messenger 위에 별도 Fragment나 View를 오버레이하는 것을 권장합니다.
 
 ---
+
+### 1단계: Context Object로 상품 ID 전달
+
+화면을 열 때 `ConversationSettingsParams.context`에 상품 ID를 담아 전달합니다. 이 값은 대화의 context로 서버에 전달되어 AI 에이전트가 상품 맥락을 인지하는 데에도 사용됩니다.
+
+```kotlin
+import com.sendbird.sdk.aiagent.messenger.model.ConversationSettingsParams
+import com.sendbird.sdk.aiagent.messenger.ui.activity.MessengerActivity
+
+fun openConversationWithProduct(productId: String) {
+    // 배너에서 사용할 수 있도록 앱 쪽에도 현재 상품 ID를 보관
+    CurrentProduct.id = productId
+
+    startActivity(
+        MessengerActivity.newIntentForConversation(
+            context = this,
+            aiAgentId = "YOUR_AI_AGENT_ID",
+            conversationSettingsParams = ConversationSettingsParams(
+                context = mapOf("product_id" to productId),
+            ),
+        )
+    )
+}
+
+// 배너가 참조할 앱 레벨 상태 (예시)
+object CurrentProduct {
+    var id: String? = null
+}
+```
+
+> 상품별로 대화 자체를 분리하고 싶다면 [제품별 대화 연동 가이드](./guide_product_conversation_connection.md)를 함께 참고하세요.
+
+---
+
+### 2단계: ConversationModule 확장으로 배너 View 추가
+
+대화 화면의 레이아웃은 `ConversationModule.onCreateContentView()`가 구성합니다. 이 클래스는 `open`이므로 상속해서 **헤더 바로 아래에 배너 View를 삽입**할 수 있습니다.
+
+```kotlin
+import android.content.Context
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.widget.LinearLayout
+import com.sendbird.sdk.aiagent.messenger.consts.MessengerThemeMode
+import com.sendbird.sdk.aiagent.messenger.model.MessengerSettings
+import com.sendbird.sdk.aiagent.messenger.model.theme.MessengerTheme
+import com.sendbird.sdk.aiagent.messenger.modules.ConversationModule
+
+class ProductBannerConversationModule(
+    context: Context,
+    currentTheme: MessengerTheme,
+    currentThemeMode: MessengerThemeMode,
+    settings: MessengerSettings?,
+    args: Bundle,
+) : ConversationModule(context, currentTheme, currentThemeMode, settings, args) {
+
+    var bannerView: View? = null
+        private set
+
+    override fun onCreateContentView(context: Context, inflater: LayoutInflater, args: Bundle?): View {
+        val root = super.onCreateContentView(context, inflater, args) as LinearLayout
+
+        // 앱에서 만든 배너 레이아웃 inflate
+        val banner = inflater.inflate(R.layout.view_product_banner, root, false)
+        bannerView = banner
+
+        // 헤더가 표시 중이면 헤더(0) 바로 아래(1), 아니면 최상단(0)에 삽입
+        val insertIndex = if (params.isUsingHeader) 1 else 0
+        root.addView(banner, insertIndex)
+
+        bindProductBanner(banner)  // 3단계에서 구현
+        return root
+    }
+}
+```
+
+만든 모듈을 **화면을 열기 전에** Provider로 등록합니다.
+
+```kotlin
+import com.sendbird.sdk.aiagent.messenger.providers.AIAgentModuleProviders
+import com.sendbird.sdk.aiagent.messenger.providers.ConversationModuleProvider
+
+AIAgentModuleProviders.conversation =
+    ConversationModuleProvider { context, currentTheme, currentThemeMode, settings, args ->
+        ProductBannerConversationModule(context, currentTheme, currentThemeMode, settings, args)
+    }
+```
+
+배너 레이아웃 예시:
+
+```xml
+<!-- res/layout/view_product_banner.xml -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/productBanner"
+    android:layout_width="match_parent"
+    android:layout_height="80dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:padding="12dp"
+    android:visibility="gone">
+
+    <ImageView
+        android:id="@+id/productImage"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:scaleType="centerCrop" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_marginStart="12dp"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/productName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/productPrice"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+</LinearLayout>
+```
+
+---
+
+### 3단계: 상품 정보 조회 및 배너 바인딩
+
+앱이 보관한 상품 ID(`CurrentProduct.id`)로 상품 정보를 조회해 배너에 표시합니다. 조회/이미지 로딩은 앱에서 사용 중인 HTTP 클라이언트(Retrofit 등)와 이미지 라이브러리(Glide/Coil)를 그대로 사용하면 됩니다.
+
+```kotlin
+// ProductBannerConversationModule의 메서드로 구현
+private fun bindProductBanner(banner: View) {
+    val productId = CurrentProduct.id ?: return
+
+    // 예시: 앱의 API로 상품 정보 조회 (Retrofit/코루틴 등 앱 표준 방식 사용)
+    fetchProduct(productId) { product ->
+        banner.findViewById<TextView>(R.id.productName).text = product.name
+        banner.findViewById<TextView>(R.id.productPrice).text = "₩%,d".format(product.price)
+        Glide.with(banner).load(product.imageUrl).into(banner.findViewById(R.id.productImage))
+
+        banner.setOnClickListener {
+            // 상품 상세 페이지로 이동 등
+        }
+        banner.visibility = View.VISIBLE
+    }
+}
+```
+
+---
+
+### 구현 체크리스트
+
+- [ ] 화면 실행 시 `ConversationSettingsParams.context`에 `product_id` 포함
+- [ ] `AIAgentModuleProviders.conversation` 등록은 init 직후, 화면 열기 전 1회
+- [ ] 상품 정보 API 오류 처리 (실패 시 배너 미표시 권장)
+- [ ] 배너 클릭 동작 정의 (상품 상세 페이지 이동 등)
+- [ ] 배너 높이 고정 (70~100dp 권장 — 채팅 영역을 과도하게 차지하지 않도록)
+
+---
+
+### 주의사항
+
+- **배너는 앱 소유 View입니다**: SDK는 배너의 데이터/생명주기를 관리하지 않습니다. 상품 조회 실패, 이미지 로딩, 클릭 처리는 앱에서 구현합니다.
+- **Light/Dark 테마**: 배너 배경/텍스트 색상은 SDK 테마 모드(`AIAgentMessenger.currentThemeMode`)에 맞춰 앱에서 지정하세요.
+- **상품 전환**: 다른 상품 페이지에서 다시 화면을 열면 새 `context`가 전달됩니다. 상품별로 대화를 분리하려면 [제품별 대화 연동 가이드](./guide_product_conversation_connection.md)의 검색/생성 흐름을 사용하세요.
 
 ## 웹 (JavaScript / React)
 

@@ -112,63 +112,80 @@ AI Agent: "여기 사진이 있습니다 ![alt-text](https://example.com/image.j
 
 ## Android
 
+### 개요
+
+**문제:**
+
+- 응답이 스트리밍될 때 완성되지 않은 Markdown 토큰(예: `![image](`)이 잠시 노출됨
+- 불완전한 마크다운 형식이 사용자에게 보여 화면이 깜빡이는 것처럼 보임
+
+**해결책:**
+
+- `deferredMarkdownElements` 설정으로 이미지/링크 마크다운이 **완성될 때까지 숨겼다가**, 완성되면 표시
+
+---
+
 ### 설정 방법
+
+앱 초기화 시(init 직후, 화면 열기 전) 1회 설정합니다.
 
 ```kotlin
 import com.sendbird.sdk.aiagent.messenger.AIAgentMessenger
-import com.sendbird.sdk.aiagent.messenger.model.DeferredMarkdownElement
+import com.sendbird.sdk.aiagent.messenger.consts.DeferredMarkdownElement
 
-// 앱 초기화 시 설정
-AIAgentMessenger.config.conversation.list.deferredMarkdownElements =
-    setOf(
-        DeferredMarkdownElement.IMAGE,
-        DeferredMarkdownElement.LINK
-    )
+// 이미지와 링크가 완성될 때까지 숨김
+AIAgentMessenger.config.conversation.list.deferredMarkdownElements = setOf(
+    DeferredMarkdownElement.IMAGE,
+    DeferredMarkdownElement.LINK,
+)
 ```
 
-또는 Launcher 시작 시:
+#### 옵션
 
-```kotlin
-import com.sendbird.sdk.aiagent.messenger.LauncherSettingsParams
+| 값                              | 설명                                                     |
+| ------------------------------- | -------------------------------------------------------- |
+| `DeferredMarkdownElement.IMAGE` | 마크다운 이미지 `![alt](url)` 형식이 완성될 때까지 숨김  |
+| `DeferredMarkdownElement.LINK`  | 마크다운 링크 `[text](url)` 형식이 완성될 때까지 숨김    |
+| `emptySet()` (기본값)           | 모든 마크다운 요소를 즉시 렌더링 (기존 동작)             |
 
-MessengerLauncher(
-    context,
-    "YOUR_AI_AGENT_ID",
-    LauncherSettingsParams()
-).attach()
-```
-
-### 옵션
-
-```kotlin
-// DeferredMarkdownElement enum
-enum class DeferredMarkdownElement {
-    IMAGE,  // 마크다운 이미지 형식 숨김
-    LINK    // 마크다운 링크 형식 숨김
-}
-```
-
-### 예제: 이미지만 숨기기
+#### 예제: 이미지만 숨기기
 
 ```kotlin
 AIAgentMessenger.config.conversation.list.deferredMarkdownElements =
     setOf(DeferredMarkdownElement.IMAGE)
 ```
 
-### 예제: 전체 화면 Messenger 시작
+---
 
-```kotlin
-startActivity(
-    MessengerActivity.newIntentForConversation(
-        context = this,
-        aiAgentId = "YOUR_AI_AGENT_ID"
-    )
-)
+### 스트리밍 동작
 
-// 위의 설정이 적용됨
+```
+수신된 메시지 데이터 기준:
+AI Agent: "여기 사진이 있습니다 ![a                                  <- 숨겨짐 (미완성 토큰)
+AI Agent: "여기 사진이 있습니다 ![alt-text](ht                       <- 숨겨짐 (미완성 토큰)
+AI Agent: "여기 사진이 있습니다 ![alt-text](https://.../image.jpg)   <- 표시됨!
 ```
 
+> **동작 기준에 대한 참고**: 이 설정은 **수신된 메시지 데이터에 포함된 미완성 마크다운 토큰**을 숨기는 기능입니다. 데이터에 이미 완성된 링크/이미지가 들어온 뒤 화면의 타이핑(글자 표시) 애니메이션이 진행되는 동안에는, 링크 텍스트가 글자 단위로 나타나면서 링크 스타일이 먼저 보일 수 있습니다 — 이는 정상 동작이며 깨진 마크다운 형식(`![a](ht` 같은 원문)이 노출되는 것을 막는 것이 이 설정의 목적입니다.
+
 ---
+
+### 추천 설정
+
+| 설정                | 장점                                          | 단점                       |
+| ------------------- | --------------------------------------------- | -------------------------- |
+| `{IMAGE, LINK}`     | 불완전한 마크다운 미노출, 깔끔한 사용자 경험  | 이미지/링크 표시 약간 지연 |
+| `{IMAGE}`           | 이미지만 완성 대기, 링크는 즉시 표시          | 링크는 부분 노출 가능      |
+| `emptySet()` (기본) | 가장 빠른 초기 렌더링                         | 불완전한 마크다운 일시 노출 |
+
+- **쇼핑 앱**: `{IMAGE, LINK}` — 상품 이미지가 중요하므로 완성될 때까지 대기 권장
+
+---
+
+### 주의사항
+
+- 설정은 **화면을 열기 전에** 적용해야 합니다. 이미 열려 있는 대화 화면에는 소급 적용되지 않습니다.
+- 스트리밍 중 요소가 잠시 안 보이다가 완성 시점에 나타나는 것은 정상 동작입니다.
 
 ## React Native
 

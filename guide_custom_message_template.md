@@ -396,206 +396,174 @@ export function App() {
 
 ## Android 구현
 
-### 1단계: 커스텀 View Handler 구현
+### 개요
+
+**Custom Message Template이란?**
+
+- Sendbird가 미리 정의한 템플릿이 아닌, **비즈니스 특화 UI**를 구현할 수 있는 기능
+- AI Agent 서버가 구조화된 데이터(JSON)를 메시지의 `extendedMessagePayload`에 담아 전송
+- 클라이언트는 이 데이터를 받아 **직접 만든 View**로 렌더링
+- 예: 쿠폰, 상품 목록, 예약 폼, **상품 옵션 선택** 등
+
+**`go-to-hanssem-mall-with-options` 템플릿의 목표:**
+
+1. AI 에이전트가 사용자에게 상품을 추천
+2. 사용자가 **색상, 사이즈, 수량** 등 옵션 선택
+3. "장바구니 추가" / "바로 구매" 버튼 클릭
+4. 앱이 선택 결과를 처리 → 한샘 쇼핑몰로 연동
+
+---
+
+### 데이터 구조
+
+핸들러에는 SDK가 파싱한 `CustomMessageTemplateData` 목록이 전달됩니다. `response.content`에 템플릿별 데이터(JSON 문자열)가 들어 있습니다.
+
+```kotlin
+// com.sendbird.sdk.aiagent.messenger.model.conversation.CustomMessageTemplateData
+data class CustomMessageTemplateData(
+    val id: String,          // 대시보드에 설정한 템플릿 식별자
+    val response: Response,
+    val error: String?       // 실패 사유 (실패 시)
+) {
+    data class Response(
+        val status: Int,     // HTTP 상태 코드
+        val content: String? // 콘텐츠 페이로드 (JSON 문자열)
+    )
+}
+```
+
+#### 렌더링 위치
+
+커스텀 템플릿은 메시지 본문(버블) 아래의 전용 슬롯에 렌더링됩니다.
+
+```
+┌─────────────────────────────┐
+│        <MessageBubble>      │
+└─────────────────────────────┘
+┌─────────────────────────────┐
+│   <CustomMessageTemplate>   │   <- 앱이 만든 View가 이 위치에 표시됨
+└─────────────────────────────┘
+┌─────────────────────────────┐
+│        <Feedback> 등        │
+└─────────────────────────────┘
+```
+
+---
+
+### 1단계: `CustomMessageTemplateViewHandler` 구현
+
+SDK가 커스텀 템플릿 데이터를 감지하면 이 핸들러를 호출하고, 앱은 View를 만들어 `callback.onViewReady(view)`로 돌려줍니다.
 
 ```kotlin
 import android.content.Context
 import android.view.LayoutInflater
 import android.view.View
-import android.widget.Button
-import android.widget.EditText
-import android.widget.ImageView
-import android.widget.Spinner
 import android.widget.TextView
-import com.sendbird.sdk.aiagent.messenger.model.CustomMessageTemplateData
-import com.sendbird.sdk.aiagent.messenger.interfaces.CustomMessageTemplateViewHandler
+import com.sendbird.android.message.BaseMessage
 import com.sendbird.sdk.aiagent.messenger.interfaces.CustomMessageTemplateViewCallback
-import com.bumptech.glide.Glide
+import com.sendbird.sdk.aiagent.messenger.interfaces.CustomMessageTemplateViewHandler
+import com.sendbird.sdk.aiagent.messenger.model.conversation.CustomMessageTemplateData
 import org.json.JSONObject
 
 class ProductOptionTemplateHandler : CustomMessageTemplateViewHandler {
+
     override fun onCreateCustomMessageTemplateView(
         context: Context,
         message: BaseMessage,
         data: List<CustomMessageTemplateData>,
-        callback: CustomMessageTemplateViewCallback
+        callback: CustomMessageTemplateViewCallback,
     ) {
-        // "go-to-hanssem-mall-with-options" 템플릿 찾기
         val template = data.firstOrNull { it.id == "go-to-hanssem-mall-with-options" }
             ?: return callback.onViewReady(createFallbackView(context))
 
         // 에러 처리
         if (template.error != null) {
-            return callback.onViewReady(createErrorView(context, template.error))
+            return callback.onViewReady(createErrorView(context, "상품 정보를 불러올 수 없습니다."))
         }
-
         // 상태 코드 확인
         if (template.response.status != 200) {
             return callback.onViewReady(
-                createErrorView(context, "상품 정보를 불러올 수 없습니다. (상태: ${template.response.status})")
+                createErrorView(context, "상품 정보를 불러올 수 없습니다. (오류: ${template.response.status})")
             )
         }
 
-        try {
-            val content = template.response.content ?: return callback.onViewReady(createFallbackView(context))
-            val product = JSONObject(content)
-            val view = createProductOptionView(context, product)
-            callback.onViewReady(view)
+        val view = try {
+            val content = template.response.content
+                ?: return callback.onViewReady(createFallbackView(context))
+            createProductOptionView(context, JSONObject(content))
         } catch (e: Exception) {
-            callback.onViewReady(createErrorView(context, "데이터 파싱 오류: ${e.message}"))
+            createErrorView(context, "상품 데이터 파싱 오류")
         }
+        // onViewReady는 반드시 메인 스레드에서 호출해야 합니다.
+        callback.onViewReady(view)
     }
 
     private fun createProductOptionView(context: Context, product: JSONObject): View {
-        val view = LayoutInflater.from(context).inflate(R.layout.custom_product_option_template, null)
-
-        // 상품 이미지
-        val imageView = view.findViewById<ImageView>(R.id.productImage)
-        Glide.with(context)
-            .load(product.optString("productImage"))
-            .placeholder(R.drawable.ic_placeholder)
-            .error(R.drawable.ic_error)
-            .into(imageView)
-
-        // 상품명
-        view.findViewById<TextView>(R.id.productName).apply {
-            text = product.optString("productName", "상품명 없음")
-        }
-
-        // 가격
-        view.findViewById<TextView>(R.id.productPrice).apply {
-            text = "₩${product.optLong("price", 0).let { String.format("%,d", it) }}"
-        }
-
-        // 설명
-        product.optString("description").let { description ->
-            if (description.isNotEmpty()) {
-                view.findViewById<TextView>(R.id.productDescription).apply {
-                    text = description
-                }
-            }
-        }
-
-        // 옵션들 추가
-        val optionsContainer = view.findViewById<android.widget.LinearLayout>(R.id.optionsContainer)
-        val options = product.optJSONObject("options") ?: JSONObject()
-
-        val spinners = mutableMapOf<String, Spinner>()
-        val spinnerValues = mutableMapOf<String, String>()
-
-        options.keys().forEach { optionName ->
-            val optionValues = options.getJSONArray(optionName)
-            val valuesList = mutableListOf<String>()
-            valuesList.add("-- 선택해주세요 --")
-
-            for (i in 0 until optionValues.length()) {
-                valuesList.add(optionValues.getString(i))
-            }
-
-            val spinner = Spinner(context).apply {
-                adapter = android.widget.ArrayAdapter(
-                    context,
-                    android.R.layout.simple_spinner_item,
-                    valuesList
-                )
-                setOnItemSelectedListener(object : android.widget.AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                        spinnerValues[optionName] = if (position > 0) valuesList[position] else ""
-                    }
-
-                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-                })
-            }
-
-            spinners[optionName] = spinner
-
-            // 옵션 라벨 + 스피너
-            val optionLabel = TextView(context).apply {
-                text = "$optionName *"
-                textSize = 13f
-                setTextColor(context.resources.getColor(android.R.color.black))
-            }
-
-            optionsContainer.addView(optionLabel)
-            optionsContainer.addView(spinner)
-        }
-
-        // 수량 입력
-        val quantityInput = view.findViewById<EditText>(R.id.quantityInput).apply {
-            setText("1")
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-        }
-
-        // 액션 버튼
-        view.findViewById<Button>(R.id.addToCartButton).setOnClickListener {
-            val unselectedOptions = spinnerValues.filterValues { it.isEmpty() }.keys
-            if (unselectedOptions.isNotEmpty()) {
-                android.widget.Toast.makeText(
-                    context,
-                    "다음 옵션을 선택해주세요: ${unselectedOptions.joinToString(", ")}",
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
-                return@setOnClickListener
-            }
-
-            val quantity = quantityInput.text.toString().toIntOrNull() ?: 1
-            val productId = product.optString("productId")
-            val selectedData = mapOf(
-                "productId" to productId,
-                "quantity" to quantity.toString(),
-                "options" to spinnerValues.toString()
-            )
-
-            // GA4 트래킹
-            // FirebaseAnalytics.getInstance(context).logEvent("add_to_cart") { ... }
-
-            android.widget.Toast.makeText(context, "장바구니에 추가되었습니다!", android.widget.Toast.LENGTH_SHORT).show()
-        }
-
+        // 파싱한 product JSON(productId/productName/price/options 등)으로
+        // 앱의 UI 컴포넌트(상품 카드, 옵션 선택, 장바구니/구매 버튼 등)를 자유롭게 구성합니다.
+        // 버튼 클릭 시 쇼핑몰 연동·GA4 추적은 앱에서 처리 (guide_ga4_livemetric.md 참고)
+        val view = LayoutInflater.from(context)
+            .inflate(R.layout.view_product_option_template, null)
+        // ... 앱 구현 ...
         return view
     }
 
-    private fun createErrorView(context: Context, message: String): View {
-        return TextView(context).apply {
+    private fun createErrorView(context: Context, message: String): View =
+        TextView(context).apply {
             text = message
-            setPadding(16, 16, 16, 16)
-            setTextColor(android.graphics.Color.RED)
+            setPadding(32, 32, 32, 32)
         }
-    }
 
-    private fun createFallbackView(context: Context): View {
-        return TextView(context).apply {
+    private fun createFallbackView(context: Context): View =
+        TextView(context).apply {
             text = "지원하지 않는 템플릿입니다"
-            setPadding(16, 16, 16, 16)
-            setTextColor(context.resources.getColor(android.R.color.darker_gray))
+            setPadding(32, 32, 32, 32)
         }
-    }
-}
-```
-
-### 2단계: Handler 등록
-
-```kotlin
-import com.sendbird.sdk.aiagent.messenger.AIAgentMessenger
-import com.sendbird.sdk.aiagent.messenger.model.ConversationMessageListUIParams
-
-// MessengerLauncher 생성 시
-MessengerLauncher(context, "YOUR_AI_AGENT_ID").apply {
-    // Custom message template handler 설정
-    params = LauncherSettingsParams().apply {
-        // Launcher 시작 시에 커스텀 handler를 설정할 수 없으므로,
-        // Fragment 내에서 ConversationMessageListUIParams를 통해 설정해야 함
-    }
-}.attach()
-
-// 또는 AIAgentAdapterProviders를 통해 전역 설정
-AIAgentAdapterProviders.conversation = { channel, uiParams, containerGenerator ->
-    uiParams.customMessageTemplateViewHandler = ProductOptionTemplateHandler()
-    ConversationMessageListAdapter(channel, uiParams, containerGenerator)
 }
 ```
 
 ---
+
+### 2단계: 핸들러 등록
+
+핸들러는 대화 어댑터 Provider를 통해 등록합니다. **init 직후, 화면 열기 전에 1회** 수행하세요.
+
+```kotlin
+import com.sendbird.sdk.aiagent.messenger.providers.AIAgentAdapterProviders
+import com.sendbird.sdk.aiagent.messenger.providers.ConversationAdapterProvider
+import com.sendbird.sdk.aiagent.messenger.ui.recyclerview.ConversationMessageListAdapter
+
+AIAgentAdapterProviders.conversation =
+    ConversationAdapterProvider { channel, uiParams, containerGenerator ->
+        uiParams.customMessageTemplateViewHandler = ProductOptionTemplateHandler()
+        ConversationMessageListAdapter(channel, uiParams, containerGenerator)
+    }
+```
+
+---
+
+### 주의사항
+
+#### 1. 에러/폴백 처리 필수
+
+- `template.error != null` → 실패 사유 표시 또는 배너 미표시
+- `template.response.status != 200` → 오류 UI
+- JSON 파싱 실패 → try-catch로 방어
+- **등록하지 않은 템플릿 ID**가 내려올 수 있으므로 폴백 View를 반환해 앱이 깨지지 않게 하세요.
+
+#### 2. 스레드
+
+- `callback.onViewReady(view)`는 **반드시 메인 스레드에서 호출**해야 합니다.
+- 핸들러 내부에서 네트워크 등 비동기 작업을 한다면, 완료 후 메인 스레드로 전환해 `onViewReady`를 호출하세요.
+
+#### 3. 성능
+
+- 메시지 목록(RecyclerView) 안에 렌더링되므로 View 생성을 가볍게 유지하세요.
+- 이미지: Glide/Coil 등의 캐싱 라이브러리 사용 권장.
+
+#### 4. 하나의 메시지에 여러 템플릿
+
+- `data`는 리스트입니다. 한 메시지에 여러 템플릿이 올 수 있으니 `id`로 필터링해 처리하세요.
 
 ## iOS 구현
 

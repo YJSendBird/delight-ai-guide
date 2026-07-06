@@ -219,15 +219,92 @@ AIAgentMessenger.config.conversation.isTalkToAgentViewEnabled = false
 
 ## Android
 
-### 구현 방법
+### 0. 지원 현황 한눈에
 
-> 작성 예정
+| 요구사항                                                        | 대응                        |
+| --------------------------------------------------------------- | --------------------------- |
+| ① 제품 페이지 진입 → 제품 대화 열기 (이전 대화 있으면 재개, 없으면 새로 생성) | **지원** (본 가이드)        |
+| ② 대화 목록의 "새 대화" 버튼 → 현재 제품으로                    | SDK 작업/배포 후 가이드 제공 |
+| ③ 대화 종료 후 "새 대화" 버튼 → 현재 제품으로                   | **버튼 숨김** (설정)        |
 
-### 코드 예시
+> **핵심 원칙** — `product_id`는 항상 대화의 **context 객체**에 담습니다 (검색/생성/표시 시 동일하게). context는 키-값 맵이라 필요한 다른 값도 함께 담을 수 있습니다. 이렇게 해야 같은 제품의 대화를 다시 찾을 수 있습니다.
+
+> **사전 준비** — 앱 초기화 직후 `AIAgentMessenger.updateSessionInfo(...)`로 **사용자 정체(익명/인증)** 를 1회 설정해 두어야 합니다 — `SessionInfo.AnonymousSessionInfo()` 또는 `SessionInfo.ManualSessionInfo(...)`. ([README의 공통 사전 준비](./README.md) 참고)
+
+---
+
+### 1. 제품 대화 띄우기 (필수)
+
+제품 페이지에 진입할 때 호출합니다.
+
+`product_id`로 대화를 **검색**하고 — 있으면 그 대화를 열고, 없으면 같은 context로 **새 대화를 생성**해서 엽니다.
 
 ```kotlin
-// 작성 예정
+import androidx.lifecycle.lifecycleScope
+import com.sendbird.sdk.aiagent.messenger.AIAgentMessenger
+import com.sendbird.sdk.aiagent.messenger.model.ConversationCreateParams
+import com.sendbird.sdk.aiagent.messenger.model.ConversationSettingsParams
+import com.sendbird.sdk.aiagent.messenger.model.SearchConversationParams
+import com.sendbird.sdk.aiagent.messenger.ui.activity.MessengerActivity
+import kotlinx.coroutines.launch
+
+// Activity 메서드. aiAgentId는 화면이 보유한 nullable 필드.
+private fun openProductConversation(productId: String) {
+    val aiAgentId = aiAgentId ?: return
+    val context = mapOf(
+        "product_id" to productId
+        // 필요 시 다른 키도 함께 담을 수 있습니다 ("키" to 값, ...)
+    )
+    lifecycleScope.launch {
+        runCatching {
+            with(AIAgentMessenger) {
+                val existing = awaitSearchConversation(              // 기존 대화 검색
+                    SearchConversationParams(aiAgentId, context)
+                ).firstOrNull()
+                val url = existing ?: awaitCreateConversation(       // 없으면 새로 생성
+                    ConversationCreateParams(aiAgentId = aiAgentId, context = context)
+                )
+                startActivity(
+                    MessengerActivity.newIntentForConversation(
+                        this@YourActivity, aiAgentId, url,
+                        ConversationSettingsParams(context = context) // 새 대화도 제품 스코프
+                    )
+                )
+            }
+        }.onFailure {
+            // 네트워크 오류 등 — 재시도 UI 또는 무시
+        }
+    }
+}
 ```
+
+동작 요약:
+
+- `awaitSearchConversation` — `context`가 **정확히 일치**하는 대화의 채널 URL 목록을 반환합니다 (없으면 빈 리스트).
+- `awaitCreateConversation` — 해당 `context`로 새 대화를 만들고 채널 URL을 반환합니다.
+- `MessengerActivity.newIntentForConversation(..., url, ...)` — 해당 대화를 전체 화면으로 엽니다.
+
+---
+
+### 2. 대화 종료 후 "새 대화" 버튼 제어
+
+대화가 종료되면 대화 화면 하단에 "새 대화 시작" 버튼이 나타납니다. 이 버튼으로 시작한 새 대화는 현재 제품 스코프가 보장되지 않으므로, 아래 설정으로 **버튼을 숨김** 처리해주세요.
+
+이 설정은 **대화 화면을 열기 전에** 적용되어 있어야 합니다. init 직후 1회 설정을 권장합니다.
+
+```kotlin
+// init 직후, 화면 열기 전 1회
+AIAgentMessenger.config.conversation.list.shouldShowMessageFooterView = false
+```
+
+---
+
+### 체크리스트
+
+1. **product_id는 context에.** 검색/생성/표시 모든 호출에서 동일하게 `mapOf("product_id" to ...)`.
+2. **제품 페이지 진입 시** `openProductConversation` 호출 (1단계).
+3. **대화 종료 후 "새 대화" 버튼**은 설정으로 숨김 (2단계).
+4. **전역 설정/등록**은 init 직후, 화면 열기 전에 1회.
 
 ---
 
