@@ -32,50 +32,84 @@ AIAgentMessenger.presentConversation(
 
 ## Android
 
-### LauncherSettingsParams를 통한 설정
+### 개요
 
-Android SDK에서는 `LauncherSettingsParams`의 `language` 프로퍼티로 한글을 강제 설정합니다.
+언어는 화면을 열 때 전달하는 `ConversationSettingsParams.language`로 지정합니다. 이 값은 두 곳에 적용됩니다.
 
-```kotlin
-// Launcher 버튼 사용 시
-MessengerLauncher(this, "YOUR_AI_AGENT_ID", LauncherSettingsParams(
-    language = "ko-KR",  // 한글(한국) 설정
-    countryCode = "KR"   // 옵션: 국가 코드
-)).attach()
-```
+1. **SDK 화면 UI 언어** — Messenger 화면(`MessengerActivity`)이 해당 언어의 로케일로 표시됩니다.
+2. **대화 메타데이터** — 서버로 전달되어 AI 에이전트 응답 언어 결정에 사용됩니다.
 
-### MessengerActivity를 통한 전체 화면 모드
+---
+
+### 전체 화면 모드에서 한글 설정
 
 ```kotlin
-// 전체 화면 모드로 대화 화면 표시
-val intent = MessengerActivity.newIntentForConversation(
-    context,
-    "YOUR_AI_AGENT_ID"
-)
-startActivity(intent)
+import com.sendbird.sdk.aiagent.messenger.model.ConversationSettingsParams
+import com.sendbird.sdk.aiagent.messenger.ui.activity.MessengerActivity
 
-// 또는 LauncherSettingsParams로 언어 사전 설정
-MessengerLauncher(context, "YOUR_AI_AGENT_ID", LauncherSettingsParams(
-    language = "ko-KR",
-    countryCode = "KR"
-)).attach()
-```
-
-### Context 객체를 통한 언어 설정
-
-```kotlin
-// Context object에 언어 정보 포함
-MessengerLauncher(this, "YOUR_AI_AGENT_ID", LauncherSettingsParams(
-    language = "ko-KR",
-    countryCode = "KR",
-    context = mapOf(
-        "language" to "ko",
-        "country" to "KR"
+startActivity(
+    MessengerActivity.newIntentForConversation(
+        context = this,
+        aiAgentId = "YOUR_AI_AGENT_ID",
+        conversationSettingsParams = ConversationSettingsParams(
+            language = "ko-KR",  // 한글(한국) 강제 설정
+            country = "KR",      // 옵션: 국가 코드
+        ),
     )
-)).attach()
+)
+```
+
+대화 목록 화면도 동일합니다.
+
+```kotlin
+startActivity(
+    MessengerActivity.newIntentForConversationList(
+        context = this,
+        aiAgentId = "YOUR_AI_AGENT_ID",
+        conversationSettingsParams = ConversationSettingsParams(
+            language = "ko-KR",
+            country = "KR",
+        ),
+    )
+)
 ```
 
 ---
+
+### 언어 코드 형식
+
+- `language`: **IETF BCP 47** 형식 — 한국어는 `ko-KR` (그 외 `en-US`, `ja-JP` 등)
+- `country`: **ISO 3166** 형식 — `KR`, `US`, `JP` 등
+- 기본값: `language`를 지정하지 않으면 디바이스 로케일(`Locale.getDefault()`)이 사용됩니다.
+
+---
+
+### SDK 내장 UI 언어
+
+SDK 화면의 버튼/안내 문구 등 내장 문자열은 아래 언어의 번역을 포함합니다.
+
+| 언어       | 코드 |
+| ---------- | ---- |
+| 영어(기본) | `en` |
+| 한국어     | `ko` |
+| 일본어     | `ja` |
+| 독일어     | `de` |
+| 스페인어   | `es` |
+| 프랑스어   | `fr` |
+| 힌디어     | `hi` |
+| 이탈리아어 | `it` |
+| 포르투갈어 | `pt` |
+| 터키어     | `tr` |
+
+- 목록에 없는 언어를 지정하면 UI 문자열은 기본값(영어)으로 표시됩니다.
+- SDK 문자열을 앱에서 직접 바꾸고 싶다면, 앱의 `strings.xml`에 **같은 키**로 재정의하면 됩니다 (예: `aa_text_...` 키). 앱 리소스가 SDK 리소스보다 우선 적용됩니다.
+
+---
+
+### 주의사항
+
+- **화면을 열 때마다 명시적으로 전달**: `language`는 화면 실행 시점에 적용됩니다. 한글 고정이 목적이라면 `MessengerActivity`를 여는 모든 곳에서 `language = "ko-KR"`을 일관되게 전달하세요.
+- **AI 응답 언어**: 에이전트의 응답 언어는 대시보드의 에이전트 설정과 함께 동작합니다. `language`를 전달해도 기대와 다르게 응답한다면 대시보드 설정을 함께 확인하세요.
 
 ## 웹 (JavaScript / React)
 
