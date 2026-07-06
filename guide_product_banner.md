@@ -167,6 +167,11 @@ func fetchProductInfo(productId: String, completion: @escaping (Product) -> Void
 
 판정 기준은 **channelURL 비교**입니다. 제품 대화를 열 때(`presentConversation` 호출 시점) 그 채널 URL을 기록해 두고, 헤더가 현재 표시 중인 채널과 비교해서 다르면 숨깁니다.
 
+**타이밍 주의**: 헤더의 현재 채널(`dataSource(with: .channel)`)은 **비동기로 로드**되기 때문에, 헤더가 만들어지는 시점에는 nil입니다. 그래서 두 가지가 필요합니다.
+
+- 배너는 **기본 숨김**으로 시작한다 — 노출 상태로 시작하면 다른 대화로 진입했을 때 로드 완료 전까지 배너가 잠깐 보이는 깜빡임이 생깁니다.
+- 판정은 채널이 로드될 때까지 **짧게 재시도**한다 — `layoutSubviews`는 채널 로드 후 재호출이 보장되지 않아 판정 지점으로 부적합합니다.
+
 ```swift
 // 1) 제품 대화를 여는 시점에 채널 URL 기록
 enum ProductConversationRouter {
@@ -183,28 +188,34 @@ private func presentProductConversation(channelURL: String, context: [String: St
 ```swift
 // 2) 헤더에서 현재 채널과 비교해 배너 노출 여부 갱신
 final class ProductBannerHeader: SBAConversationModule.Header {
-    // ... (3단계의 layoutBody 구성에 아래 로직 추가)
+    // ... (3단계의 layoutBody 구성에서 banner.isHidden = true 로 기본 숨김 처리)
 
     // 헤더의 dataSource로 현재 채널을 조회할 수 있다 (.channel 이벤트).
-    // 채널이 바뀌어 레이아웃이 갱신될 때마다 노출 여부를 다시 판정한다.
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        updateBannerVisibility()
+    // 채널이 비동기 로드되므로, 화면에 붙은 뒤 로드될 때까지 짧게 재시도하며 판정한다.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        updateBannerVisibility(retries: 10)
     }
 
-    private func updateBannerVisibility() {
-        guard let banner = bannerView else { return }
+    private func updateBannerVisibility(retries: Int) {
         let channel: BaseChannel? = dataSource(with: .channel)
-        // 채널이 아직 로드되지 않은 진입 직후에는 진입 대상 대화로 간주하고 노출 유지
-        guard let currentURL = channel?.channelURL else { return }
-        banner.isHidden = (currentURL != ProductConversationRouter.activeChannelURL)
+        if let currentURL = channel?.channelURL {
+            bannerView?.isHidden = (currentURL != ProductConversationRouter.activeChannelURL)
+            return
+        }
+        // 채널 미로드 — 0.3초 간격으로 최대 10회 재시도 (약 3초)
+        guard retries > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.updateBannerVisibility(retries: retries - 1)
+        }
     }
 }
 ```
 
 - `dataSource(with: .channel)`은 헤더가 현재 표시 중인 `BaseChannel`을 돌려줍니다 (`BaseChannel`은 `SendbirdChatSDK` 타입이므로 `import SendbirdChatSDK` 필요).
-- 진입 직후 채널이 아직 로드되지 않은 시점(nil)에는 숨기지 않고 유지합니다 — 제품 대화 진입 자체가 배너 대상이기 때문입니다.
-- 대화 목록에서 다른 대화를 선택해 들어가면 `channelURL`이 기록해 둔 값과 달라지므로 배너가 숨겨집니다.
+- 배너는 기본 숨김으로 시작하고, 채널 로드 후 `channelURL`이 기록해 둔 값과 일치할 때만 노출됩니다.
+- 대화 목록에서 다른 대화를 선택해 들어가면 `channelURL`이 달라지므로 배너는 숨김 상태를 유지합니다.
 
 ### 제약사항
 
