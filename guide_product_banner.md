@@ -115,6 +115,8 @@ final class ProductBannerHeader: SBAConversationModule.Header {
 
         loadProductInfo(into: banner)
 
+        // 배너가 필요한 대화에서만 vStack에 추가하세요.
+        // 필요 없는 경우에는 super.layoutBody()만 반환하면 기본 헤더 그대로입니다.
         return SBALinearLayout.vStack {
             super.layoutBody()
             banner
@@ -158,6 +160,26 @@ func fetchProductInfo(productId: String, completion: @escaping (Product) -> Void
               let product = try? JSONDecoder().decode(Product.self, from: data) else { return }
         completion(product)
     }.resume()
+}
+```
+
+### 5단계: 다른 대화에서는 배너 숨김 (예시)
+
+배너는 제품 페이지에서 연 대화에만 의미가 있으므로, 대화 목록에서 다른 대화로 진입한 경우에는 숨기는 편이 좋습니다. 아래는 **channelURL 비교** 방식의 예시입니다 — 제품 대화를 열 때 채널 URL을 기록해 두고, 헤더의 현재 채널과 비교해서 다르면 숨깁니다.
+
+> 현재 채널(`dataSource(with: .channel)`)은 비동기로 로드되므로, 배너를 기본 숨김으로 시작하고 채널이 로드된 뒤 판정하는 구성을 권장합니다. 판정 시점과 재시도 방식은 앱 구조에 맞게 조정하세요.
+
+```swift
+// 제품 대화를 여는 시점에 채널 URL 기록
+enum ProductConversationRouter {
+    static var activeChannelURL: String?
+}
+
+// 헤더에서 현재 채널과 비교 (예: didMoveToWindow 등 채널 로드 이후 시점)
+private func updateBannerVisibility() {
+    let channel: BaseChannel? = dataSource(with: .channel)
+    guard let currentURL = channel?.channelURL else { return }
+    bannerView?.isHidden = (currentURL != ProductConversationRouter.activeChannelURL)
 }
 ```
 
