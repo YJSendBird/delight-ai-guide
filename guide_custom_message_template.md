@@ -567,9 +567,63 @@ AIAgentAdapterProviders.conversation =
 
 ## iOS 구현
 
-iOS SDK에서는 `SBACustomMessageTemplateView`를 서브클래싱해서 커스텀 템플릿 UI를 구현하고, `SBAModuleSet`에 등록합니다.
+iOS SDK에서는 `SBACustomMessageTemplateView`를 서브클래싱해서 커스텀 템플릿 UI를 구현하고, `SBAModuleSet`에 등록합니다. 검증 기준 SDK 버전은 `SendbirdAIAgentCore 1.15.0`입니다.
 
-> **1.15.0 주의**: 커스텀 컴포넌트 서브클래스에 **stored property를 선언하면 대화 진입 시 크래시**합니다 (SDK 내부 의존성 주입이 프로퍼티를 순회하다 dynamic cast 오류 발생, 다음 릴리즈에서 수정 예정). 아래처럼 뷰는 `layoutBody()`에서 만들고, 참조가 필요하면 `tag` + computed property로 접근하세요.
+> **1.15.0 주의 — 서브클래스에 stored property 금지**
+>
+> 커스텀 컴포넌트 서브클래스에 **stored property를 선언하면 대화 진입 시 크래시**합니다. SDK 내부 의존성 주입(`MessengerInfoInjectable`)이 `Mirror`로 프로퍼티를 순회하다 dynamic cast 오류를 내기 때문이며, 다음 릴리즈에서 수정 예정입니다. 아래처럼 뷰는 `layoutBody()`에서 만들고, 참조가 필요하면 `tag` + computed property로 접근하세요.
+
+### 렌더링 위치와 폭
+
+커스텀 템플릿 뷰는 메시지 버블 아래의 전용 슬롯에 렌더링됩니다.
+
+```
+┌─────────────────────────────┐
+│        <MessageBubble>      │
+└─────────────────────────────┘
+┌─────────────────────────────┐
+│  <CustomMessageTemplateView>│   <- layoutBody() 가 반환한 뷰가 이 위치
+└─────────────────────────────┘
+┌─────────────────────────────┐
+│        <Feedback> 등        │
+└─────────────────────────────┘
+```
+
+**폭(width) 동작 — 웹/Android 처럼 콘텐츠 영역을 꽉 채우려면**
+
+- 커스텀 템플릿 뷰의 최대 폭 상한은 `SBAConstant.messageCellMaxWidth`(기본 244pt)입니다. `SBACustomMessageTemplateView.setupLayouts()` 가 이 값으로 `<=` 제약을 겁니다.
+- iOS Auto Layout은 폭 제약이 없으면 내부 콘텐츠의 intrinsic content size(예: 라벨 텍스트 폭)를 따라갑니다. 그래서 라벨/버튼만 넣으면 **텍스트 폭으로만** 그려지고, 웹/Android처럼 가로로 늘어나지 않습니다.
+- 콘텐츠 영역을 꽉 채우려면 **`layoutBody()`가 반환하는 루트 뷰에 폭 제약을 직접** 주세요.
+
+```swift
+override func layoutBody() -> UIView? {
+    let button = UILabel()
+    // ... 버튼 스타일 설정 ...
+    button.translatesAutoresizingMaskIntoConstraints = false
+    button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+    // 내부 요소는 가로로 늘어나도록 hugging/compression 을 낮춘다
+    button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+    let stack = SBALinearLayout.vStack(alignment: .fill) {
+        button
+    }
+
+    // 루트 뷰 폭을 메시지 최대 폭에 고정 → 내부 요소가 fill 로 함께 넓어진다
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    stack.widthAnchor.constraint(
+        equalToConstant: AIAgentMessenger.config.conversation.messageCellMaxWidth
+    ).isActive = true
+
+    return stack
+}
+```
+
+- 셀 최대 폭 자체를 넓히려면 화면을 열기 전에 다음 값을 조정합니다(기본 244pt).
+
+```swift
+AIAgentMessenger.config.conversation.messageCellMaxWidth = 288.0
+```
 
 ### 1단계: 커스텀 템플릿 뷰 생성
 
@@ -599,11 +653,17 @@ final class ProductOptionTemplateView: SBACustomMessageTemplateView {
         addToCartButton.setTitle("장바구니 추가", for: .normal)
         addToCartButton.addTarget(self, action: #selector(addToCartTapped), for: .touchUpInside)
 
-        return SBALinearLayout.vStack {
+        // full-width 로 그리려면 루트 뷰에 폭 제약을 준다 (위 "렌더링 위치와 폭" 참고)
+        let stack = SBALinearLayout.vStack(alignment: .fill) {
             nameLabel
             priceLabel
             addToCartButton
         }
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.widthAnchor.constraint(
+            equalToConstant: AIAgentMessenger.config.conversation.messageCellMaxWidth
+        ).isActive = true
+        return stack
     }
 
     // 서버가 내려준 custom_message_templates 데이터로 화면 구성
@@ -612,7 +672,12 @@ final class ProductOptionTemplateView: SBACustomMessageTemplateView {
 
         guard let template = customMessageTemplates?.first(where: {
             $0.templateId == "go-to-hanssem-mall-with-options"
-        }) else { return }
+        }) else {
+            // 등록하지 않은/조건에 안 맞는 템플릿이면 노출하지 않는다
+            self.isHidden = true
+            return
+        }
+        self.isHidden = false
 
         // 에러/상태 코드 처리
         guard template.error == nil, template.response.status == 200,
@@ -648,6 +713,8 @@ SBAModuleSet.ConversationModule.List.Cell.CustomMessageTemplateView = ProductOpt
 
 커스텀 뷰에서 `sendEvent(name:data:)`로 보낸 이벤트는 `SBAConversationViewController`의 delegate 이벤트로 전달됩니다.
 
+먼저 `SBAConversationViewController`를 상속한 클래스에서 이벤트를 받고,
+
 ```swift
 final class MyConversationViewController: SBAConversationViewController {
     override func conversationModule(
@@ -674,6 +741,12 @@ final class MyConversationViewController: SBAConversationViewController {
 }
 ```
 
+이 커스텀 VC를 **2단계와 같은 지점(화면 열기 전)에서** 등록해야 실제로 사용됩니다. 등록하지 않으면 기본 `SBAConversationViewController`가 쓰여 위 override가 호출되지 않습니다.
+
+```swift
+SBAViewControllerSet.ConversationViewController = MyConversationViewController.self
+```
+
 ### 데이터 구조 (iOS)
 
 ```swift
@@ -689,6 +762,15 @@ public struct SBACustomMessageTemplateData: Codable {
     }
 }
 ```
+
+### 주의사항 (iOS)
+
+- **stored property 금지 (1.15.0)** — 서브클래스에 저장 프로퍼티를 두면 대화 진입 시 크래시합니다. 뷰는 `layoutBody()`에서 만들고 `tag` + computed property로 참조하세요.
+- **full-width** — 콘텐츠 영역을 꽉 채우려면 `layoutBody()` 루트 뷰에 폭 제약을 직접 줍니다. 라벨/버튼만으로는 텍스트 폭으로만 그려집니다.
+- **폴백 처리** — 등록하지 않은 템플릿 ID가 내려올 수 있으므로, 대상 `templateId`가 아니면 `isHidden = true` 등으로 앱이 깨지지 않게 하세요.
+- **에러/상태 코드** — `template.error != nil`, `template.response.status != 200`, JSON 파싱 실패를 모두 방어하세요.
+- **이벤트 등록 필수** — 이벤트를 받으려면 커스텀 뷰(`CustomMessageTemplateView`)뿐 아니라 커스텀 VC(`SBAViewControllerSet.ConversationViewController`)도 등록해야 합니다.
+- **하나의 메시지에 여러 템플릿** — `configure(with:)`의 인자는 배열입니다. 한 메시지에 여러 템플릿이 올 수 있으니 `templateId`로 필터링해 처리하세요.
 
 ---
 
@@ -801,3 +883,4 @@ Glide.with(context)
 - [React Custom Message Template 문서](https://github.com/sendbird/delight-ai-agent/blob/main/js/react/docs/features/messages.md#custom-message-template)
 - [Android Custom Message Template 문서](https://github.com/sendbird/delight-ai-agent/blob/main/android/docs/features/messages.md#custom-message-template)
 - [React Native Custom Message Template 문서](https://github.com/sendbird/delight-ai-agent/blob/main/js/react-native/docs/features/messages.md#custom-message-template)
+- [iOS Messages 문서](https://github.com/sendbird/delight-ai-agent/blob/main/ios/docs/features/messages.md)
