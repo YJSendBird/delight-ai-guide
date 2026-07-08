@@ -609,7 +609,7 @@ widthConstraint.isActive = true
 ```
 
 - 기본 상태에서는 텍스트 버블과 커스텀 템플릿 모두 최대 폭 244pt, 왼쪽 시작 위치도 동일해서 **템플릿이 버블 영역을 벗어나지 않습니다**. 텍스트가 짧아 버블이 244pt보다 좁은 메시지에서는 템플릿이 버블보다 넓게 보일 수 있는데, 이것이 의도된 full-width 모양이며 최대선은 같습니다.
-- 셀 최대 폭 자체를 넓히려면 화면을 열기 전에 조정합니다(기본 244pt). 단 **이 값은 텍스트/파일 버블에만 적용**되고, 커스텀 템플릿 뷰의 상한(244pt)은 SDK 내부 상수라 이 설정으로는 올라가지 않습니다. 244pt를 넘겨 그려야 하면 아래 3)의 커스텀 셀 방식을 사용하세요.
+- 셀 최대 폭 자체를 넓히려면 화면을 열기 전에 조정합니다(기본 244pt). 단 **이 값은 텍스트/파일 버블에만 적용**되고, 커스텀 템플릿 뷰의 상한(244pt)은 SDK 내부 상수라 이 설정으로는 올라가지 않습니다. 244pt를 넘겨 그려야 하면 아래 "버블과 무관하게 좌우 동일 여백으로 꽉 채우기" 방식을 사용하세요.
 
 ```swift
 AIAgentMessenger.config.conversation.messageCellMaxWidth = 288.0
@@ -639,34 +639,125 @@ SBALinearLayout.vStack(alignment: .fill) {
 }
 ```
 
-- 셀 여백을 우회해 직접 좌우 값을 넣어야 하는 경우(예: `SBAUserMessageCell`을 상속해 `layoutMessageContentsLeft`에서 버튼을 끼우는 방식)에는 **left와 right를 같은 값으로** 줘 대칭을 맞춥니다. 아래 값은 실제로 검증한 세팅입니다.
+> `SBAPadding`은 `.init(top:left:bottom:right:)` 또는 `.init(vertical:horizontal:)`을 지원합니다. 좌우를 대칭으로 두려면 `horizontal:` 한 값으로 줘도 됩니다.
+
+### 버블과 무관하게 좌우 동일 여백으로 꽉 채우기 (커스텀 셀 방식)
+
+위의 `SBACustomMessageTemplateView` 방식(1~3단계)은 두 가지 제약 때문에 "화면 폭 기준 좌우 대칭 꽉 채움" 레이아웃을 만들 수 없습니다.
+
+- 뷰 자체에 `width <= 244pt` 상한이 required 우선순위로 걸려 있고, 기준값이 SDK 내부 상수라 앱에서 올릴 수 없습니다.
+- 셀이 붙일 때 왼쪽 여백이 프로필 폭 기준으로 고정되어(기본 38pt) 좌우가 대칭이 되지 않습니다.
+
+버블(말풍선) 폭은 그대로 두고 **템플릿만 화면 폭에서 좌우 동일 여백(예: 16pt)으로 꽉 차게** 그리려면, 메시지 셀을 서브클래싱해 버블과 시간 사이에 뷰를 직접 삽입합니다. 이 경로는 위 두 제약을 받지 않습니다. 아래는 검증된 전체 예제입니다.
 
 ```swift
-private enum Constant {
-    static let buttonHeight: CGFloat = 44     // 버튼 높이
-    static let cornerRadius: CGFloat = 10
-    static let topSpacing: CGFloat = 8        // 버블과의 간격
-    static let bottomSpacing: CGFloat = 8     // 시간(stateView)과의 간격
-    static let sideInset: CGFloat = 38        // 좌우 동일 → agent 버블 시작선과 정렬
+import UIKit
+import SendbirdAIAgentMessenger
+import SendbirdChatSDK
+
+final class ProductOptionMessageCell: SBAUserMessageCell {
+    private enum Constant {
+        static let targetTemplateId = "go-to-hanssem-mall-with-options"
+        static let buttonHeight: CGFloat = 52
+        static let cornerRadius: CGFloat = 10
+        static let topSpacing: CGFloat = 8       // 버블과의 간격
+        static let bottomSpacing: CGFloat = 8    // 시간과의 간격
+        static let sideInset: CGFloat = 16       // 좌우 대칭 → 화면 폭 - 32pt
+    }
+
+    private let actionButton = UILabel()
+
+    override func setupViews() {
+        super.setupViews()
+
+        self.actionButton.textAlignment = .center
+        self.actionButton.textColor = .white
+        self.actionButton.backgroundColor = .black
+        self.actionButton.font = .systemFont(ofSize: 16, weight: .semibold)
+        self.actionButton.layer.cornerRadius = Constant.cornerRadius
+        self.actionButton.clipsToBounds = true
+    }
+
+    // 왼쪽(agent) 메시지 레이아웃에 끼워 넣기.
+    // base 구현의 마지막 요소가 시간(stateView)이므로 그 앞에 삽입 → 버블-템플릿-시간 순서.
+    override func layoutMessageContentsLeft(
+        with configuration: SBABaseMessageCellParams
+    ) -> UIView {
+        let contents = super.layoutMessageContentsLeft(with: configuration)
+
+        // payload 에 대상 템플릿이 있을 때만 노출
+        guard let template = configuration.message.customMessageTemplate(
+            id: Constant.targetTemplateId
+        ) else { return contents }
+
+        guard let stack = contents as? UIStackView,
+              stack.arrangedSubviews.isEmpty == false else { return contents }
+
+        self.configureButton(with: template)
+        stack.insertArrangedSubview(
+            self.makeButtonRow(),
+            at: stack.arrangedSubviews.count - 1
+        )
+        return contents
+    }
+
+    private func configureButton(with template: SBACustomMessageTemplateData) {
+        guard template.error == nil, template.response.status == 200,
+              let content = template.response.content,
+              let data = content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            self.actionButton.text = "상품 정보를 불러올 수 없습니다."
+            return
+        }
+        self.actionButton.text = (json["buttonTitle"] as? String) ?? "장바구니 추가"
+    }
+
+    private func makeButtonRow() -> UIView {
+        self.actionButton.translatesAutoresizingMaskIntoConstraints = false
+        self.actionButton.heightAnchor
+            .constraint(equalToConstant: Constant.buttonHeight).isActive = true
+        // 늘어나도록 우선순위를 낮춘다 — 없으면 텍스트 폭으로 수축
+        self.actionButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        self.actionButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        // 고정 폭 없이 .fill + 좌우 대칭 패딩 → 화면 폭 - (sideInset × 2)
+        return SBALinearLayout.vStack(alignment: .fill) {
+            self.actionButton.set(padding: .init(
+                top: Constant.topSpacing,
+                left: Constant.sideInset,
+                bottom: Constant.bottomSpacing,
+                right: Constant.sideInset
+            ))
+        }
+    }
 }
 
-button.translatesAutoresizingMaskIntoConstraints = false
-button.heightAnchor.constraint(equalToConstant: Constant.buttonHeight).isActive = true
-button.setContentHuggingPriority(.defaultLow, for: .horizontal)
-button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-// 고정 폭 없이 .fill + 좌우 대칭 패딩으로 셀 폭을 채운다
-let row = SBALinearLayout.vStack(alignment: .fill) {
-    button.set(padding: .init(
-        top: Constant.topSpacing,
-        left: Constant.sideInset,
-        bottom: Constant.bottomSpacing,
-        right: Constant.sideInset
-    ))
+extension BaseMessage {
+    /// extendedMessagePayload 의 custom_message_templates 에서 대상 템플릿 추출
+    func customMessageTemplate(id: String) -> SBACustomMessageTemplateData? {
+        guard let raw = self.extendedMessagePayload["custom_message_templates"],
+              let data = try? JSONSerialization.data(withJSONObject: raw),
+              let templates = try? JSONDecoder().decode(
+                  [SBACustomMessageTemplateData].self, from: data
+              )
+        else { return nil }
+        return templates.first { $0.templateId == id }
+    }
 }
 ```
 
-> `SBAPadding`은 `.init(top:left:bottom:right:)` 또는 `.init(vertical:horizontal:)`을 지원합니다. 좌우를 대칭으로 두려면 `horizontal:` 한 값으로 줘도 됩니다.
+셀 등록 (화면 열기 전 1회):
+
+```swift
+SBAModuleSet.ConversationModule.List.UserMessageCell = ProductOptionMessageCell.self
+```
+
+이 방식의 트레이드오프:
+
+- `sendEvent(name:data:)` → `didReceiveCustomMessageTemplateAction` 이벤트 배선은 `SBACustomMessageTemplateView` 전용이라 사용할 수 없습니다. 탭 처리는 셀에서 직접(delegate 주입, responder chain 등) 구현하세요.
+- 파일 메시지에도 필요하면 `SBAModuleSet.ConversationModule.List.FileMessageCell` 도 같은 방식으로 교체하세요.
+- 재사용 셀이므로 payload 가 없는 메시지에서 템플릿이 남지 않도록, 위 예제처럼 payload 가 있을 때만 삽입하세요.
 
 ### 1단계: 커스텀 템플릿 뷰 생성
 
