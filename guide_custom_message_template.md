@@ -628,13 +628,42 @@ let stack = SBALinearLayout.vStack(alignment: .fill) { button }
 **3) 좌우/상하 여백**
 
 - 셀은 커스텀 템플릿 뷰를 붙일 때 **왼쪽 정렬 여백을 이미 적용**합니다(`messageAreaLeftSpacing`). `layoutBody()` 안에서 좌우 패딩을 또 주면 이중으로 밀립니다. 특별한 이유가 없으면 좌우 패딩은 생략하세요.
-- 위/아래 간격이 필요하면 `SBALinearLayout`의 `.set(padding:)`으로 `SBAPadding`을 줍니다. 좌우를 직접 넣어야 하는 경우(셀 여백을 우회하는 커스텀 셀 등)에는 **left와 right를 같은 값으로** 줘 대칭을 맞춥니다.
+- 위/아래 간격이 필요하면 `SBALinearLayout`의 `.set(padding:)`으로 `SBAPadding`을 줍니다.
 
 ```swift
 SBALinearLayout.vStack(alignment: .fill) {
     button.set(padding: .init(top: 8, bottom: 8)) // 상하 간격만
 }
 ```
+
+- 셀 여백을 우회해 직접 좌우 값을 넣어야 하는 경우(예: `SBAUserMessageCell`을 상속해 `layoutMessageContentsLeft`에서 버튼을 끼우는 방식)에는 **left와 right를 같은 값으로** 줘 대칭을 맞춥니다. 아래 값은 실제로 검증한 세팅입니다.
+
+```swift
+private enum Constant {
+    static let buttonHeight: CGFloat = 44     // 버튼 높이
+    static let cornerRadius: CGFloat = 10
+    static let topSpacing: CGFloat = 8        // 버블과의 간격
+    static let bottomSpacing: CGFloat = 8     // 시간(stateView)과의 간격
+    static let sideInset: CGFloat = 38        // 좌우 동일 → agent 버블 시작선과 정렬
+}
+
+button.translatesAutoresizingMaskIntoConstraints = false
+button.heightAnchor.constraint(equalToConstant: Constant.buttonHeight).isActive = true
+button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+// 고정 폭 없이 .fill + 좌우 대칭 패딩으로 셀 폭을 채운다
+let row = SBALinearLayout.vStack(alignment: .fill) {
+    button.set(padding: .init(
+        top: Constant.topSpacing,
+        left: Constant.sideInset,
+        bottom: Constant.bottomSpacing,
+        right: Constant.sideInset
+    ))
+}
+```
+
+> `SBAPadding`은 `.init(top:left:bottom:right:)` 또는 `.init(vertical:horizontal:)`을 지원합니다. 좌우를 대칭으로 두려면 `horizontal:` 한 값으로 줘도 됩니다.
 
 ### 1단계: 커스텀 템플릿 뷰 생성
 
