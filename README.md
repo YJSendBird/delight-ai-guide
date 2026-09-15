@@ -15,6 +15,7 @@ Sendbird Delight AI Agent SDK 연동 시 바로 참고할 수 있는 가이드 �
 | [Markdown 렌더링 타이밍 가이드](./guide_markdown_deferred_rendering.md) | 스트리밍 중 Markdown 이미지와 링크를 완성될 때까지 숨기는 방법 |
 | [Custom Message Template 가이드](./guide_custom_message_template.md) | 상품 옵션 선택 화면을 커스텀 메시지 템플릿으로 구현하는 방법 |
 | [GA4 LiveMetric 통합 가이드](./guide_ga4_livemetric.md) | LiveMetric 핸들러로 실시간 이벤트를 GA4에 전송하는 방법 |
+| [initialUserMessage 가이드](./guide_initial_user_message.md) | 새 대화의 첫 유저 발화를 호스트가 지정하는 방법 |
 
 ---
 
